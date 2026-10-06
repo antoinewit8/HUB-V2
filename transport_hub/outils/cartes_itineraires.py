@@ -83,10 +83,14 @@ if not st.session_state["ci_routes"]:
         prog = st.progress(0, text="Calcul en cours...")
         done = [0]
 
+        echecs = []  # (trajet, motif) — affichés si rien n'est calculé
+
         def calc(route, sheet):
             o = geocode_address(route["origin"])
             d = geocode_address(route["dest"])
             if not o or not d:
+                manquant = " et ".join(x for x, ok in [(route["origin"], o), (route["dest"], d)] if not ok)
+                echecs.append((f"{route['origin']} → {route['dest']}", f"adresse non géocodée : {manquant}"))
                 return None
             try:
                 wp = get_waypoints(route["origin"], route["dest"])
@@ -95,6 +99,7 @@ if not st.session_state["ci_routes"]:
             data = calculate_km_route(o[0], o[1], d[0], d[1],
                                       waypoints=wp, calculer_peage=calculer_peage)
             if not data or not data.get("polyline_coords"):
+                echecs.append((f"{route['origin']} → {route['dest']}", "PTV n'a renvoyé aucun tracé"))
                 return None
             return {
                 "label":  f"{route['origin']} → {route['dest']}",
@@ -118,13 +123,23 @@ if not st.session_state["ci_routes"]:
                     if res:
                         with lock:
                             routes_ok.append(res)
-                except Exception:
-                    pass
+                except Exception as e:
+                    echecs.append((f"{ro['origin']} → {ro['dest']}", f"erreur : {e}"))
 
         prog.empty()
 
         if not routes_ok:
             st.error("Aucun itinéraire calculé.")
+            cle = str(getattr(_ro, "PTV_API_KEY", "") or "")
+            if not cle or cle == "METS_TA_CLE_ICI":
+                st.warning("La clé PTV_API_KEY n'est pas lue par l'application : sans elle, aucune adresse "
+                           "ne peut être géocodée. Ajoutez-la dans les secrets (au premier niveau), "
+                           "puis redémarrez l'app (Reboot).")
+            if echecs:
+                import pandas as pd
+                with st.expander(f"Détail des échecs ({len(echecs)})", expanded=True):
+                    st.dataframe(pd.DataFrame(echecs, columns=["Trajet", "Motif"]),
+                                 hide_index=True, use_container_width=True)
         else:
             routes_ok.sort(key=lambda r: r["label"])
             st.session_state["ci_routes"] = routes_ok
