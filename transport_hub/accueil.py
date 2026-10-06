@@ -104,7 +104,7 @@ st.markdown("""
    backwards et pas both : une fois finie, l'animation ne bloque plus le transform du survol */
 .hub-cat, .st-key-hub_pills { animation: hubIn .6s .12s cubic-bezier(.2,.8,.2,1) backwards; }
 @keyframes hubCard { from { opacity: 0; transform: translateY(26px) scale(.96); } to { opacity: 1; transform: none; } }
-[class*="st-key-tool_"] { animation: hubCard .7s .2s cubic-bezier(.2,.8,.2,1) backwards; }
+[class*="st-key-tool_"] { animation: hubCard .6s .2s cubic-bezier(.2,.8,.2,1) backwards; }
 /* Retour depuis un outil : l'accueil se construit sous un voile, animations en pause
    jusqu'à ce que tout soit prêt (classe posée/retirée par le JS de transition) */
 html.hub-hold .hub-hero > div, html.hub-hold .hub-cat, html.hub-hold .st-key-hub_pills,
@@ -168,7 +168,7 @@ with st.container(key="hub_pills"):
 _CARD_CSS, i = [], 0
 for k, lbl, col, outils in CATS:
     for t in outils:
-        _CARD_CSS.append(f'.st-key-tool_{t["key"]} {{ --hub-c: {col}; animation-delay: {0.2 + min(i, 14) * 0.05:.2f}s; }}')
+        _CARD_CSS.append(f'.st-key-tool_{t["key"]} {{ --hub-c: {col}; animation-delay: {0.18 + min(i, 14) * 0.045:.2f}s; }}')
         i += 1
 st.markdown("<style>" + "\n".join(_CARD_CSS) + "</style>", unsafe_allow_html=True)
 
@@ -239,7 +239,7 @@ _TRANSITION_JS = """
       const fixed = still && el.contains(still);
       el.animate(fixed ? [{ opacity: 0 }, { opacity: 1 }]
                        : [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
-                 { duration: 520, delay: i * 40, easing: OUT, fill: 'backwards' });
+                 { duration: 460, delay: i * 35, easing: OUT, fill: 'backwards' });
     });
   }
 
@@ -292,16 +292,16 @@ _TRANSITION_JS = """
     root.appendChild(sp);
     doc.body.appendChild(root);
 
-    full.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 420, easing: SOFT, fill: 'forwards' });
+    full.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 360, easing: SOFT, fill: 'forwards' });
 
     // Tracé : ~450 ms au total, traits décalés
-    const DRAW0 = 260, per = Math.min(300, 420 / Math.max(1, strokes.length));
+    const DRAW0 = 220, per = Math.min(260, 360 / Math.max(1, strokes.length));
     strokes.forEach((el, i) => el.animate([{ strokeDashoffset: 1, opacity: 0 }, { opacity: 1, offset: .08 },
                                            { strokeDashoffset: 0, opacity: 1 }],
-      { duration: 300, delay: DRAW0 + i * per * .6, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' }));
-    const drawEnd = DRAW0 + (strokes.length - 1) * per * .6 + 300;
+      { duration: 260, delay: DRAW0 + i * per * .6, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' }));
+    const drawEnd = DRAW0 + (strokes.length - 1) * per * .6 + 260;
     label.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
-                  { duration: 360, delay: DRAW0 + 120, easing: OUT, fill: 'forwards' });
+                  { duration: 320, delay: DRAW0 + 100, easing: OUT, fill: 'forwards' });
 
     // Pulsation pendant le chargement (transform seul : continue même si la page est occupée)
     let pulse = null;
@@ -316,14 +316,14 @@ _TRANSITION_JS = """
 
     const t0 = performance.now();
     whenReady(() => doc.querySelector('.ap-hero') && !doc.querySelector('.hub-hero')
-                    && performance.now() - t0 > drawEnd + 200, () => {
+                    && performance.now() - t0 > drawEnd + 150, () => {
       revealTool();
       if (pulse) pulse.cancel();
       ico.animate([{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(1.5)', opacity: 0 }],
-                  { duration: 380, easing: 'cubic-bezier(.4,0,1,1)', fill: 'forwards' });
+                  { duration: 330, easing: 'cubic-bezier(.4,0,1,1)', fill: 'forwards' });
       label.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-out', fill: 'forwards' });
-      full.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 520, delay: 60, easing: SOFT, fill: 'forwards' });
-      setTimeout(() => root.remove(), 620);
+      full.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 450, delay: 40, easing: SOFT, fill: 'forwards' });
+      setTimeout(() => root.remove(), 520);
     });
   }, true);
 
@@ -337,14 +337,14 @@ _TRANSITION_JS = """
     // Contenu de l'outil qui recule légèrement, voile bleu nuit par-dessus
     const main = doc.querySelector('[data-testid="stMainBlockContainer"]');
     const recul = main && main.animate([{ transform: 'none', opacity: 1 }, { transform: 'scale(.97)', opacity: .6 }],
-                                       { duration: 260, easing: OUT, fill: 'forwards' });
+                                       { duration: 230, easing: OUT, fill: 'forwards' });
     const cover = layer(`width:100vw;height:100vh;z-index:999999;background:${NIGHT};opacity:0;will-change:opacity;`);
     doc.body.appendChild(cover);
-    cover.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' });
+    cover.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' });
     html.classList.add('hub-hold');   // l'accueil se construit sous le voile, animations en pause
 
     // Navigation une fois le voile posé : le blocage de Streamlit se passe derrière
-    setTimeout(() => { window.__hubBack = true; try { a.click(); } finally { window.__hubBack = false; } }, 310);
+    setTimeout(() => { window.__hubBack = true; try { a.click(); } finally { window.__hubBack = false; } }, 270);
 
     const t0 = performance.now();
     whenReady(() => doc.querySelector('.hub-foot') && !doc.querySelector('.ap-hero')
@@ -353,7 +353,7 @@ _TRANSITION_JS = """
       // l'accueil resterait à 97 % et 60 % d'opacité (page floue et délavée)
       if (recul) recul.cancel();
       html.classList.remove('hub-hold');
-      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 480, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' })
+      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 420, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' })
         .onfinish = () => cover.remove();
     });
   }, true);
