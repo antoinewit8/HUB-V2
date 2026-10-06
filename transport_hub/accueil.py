@@ -45,8 +45,8 @@ st.markdown("""
 /* Cartes outils : toute la carte est cliquable */
 [class*="st-key-tool_"] { position: relative; background: #fff; border-radius: 20px; padding: 22px 22px 16px;
   box-shadow: 0 1px 2px rgba(0,0,0,.2), 0 8px 24px rgba(0,0,0,.18); min-height: 196px; gap: 0 !important;
-  transition: transform .18s ease, box-shadow .18s ease; }
-[class*="st-key-tool_"]:hover { transform: translateY(-2px);
+  transition: transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .25s ease; }
+[class*="st-key-tool_"]:hover { transform: translateY(-5px);
   box-shadow: 0 2px 4px rgba(0,0,0,.2), 0 16px 40px rgba(0,0,0,.32); }
 [class*="st-key-tool_"] * { position: static !important; }
 [class*="st-key-tool_"] [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
@@ -63,10 +63,15 @@ st.markdown("""
 [class*="st-key-tool_"] [data-testid="stPageLink"] a span { color: var(--ap-blue) !important; font-size: 14px;
   font-weight: 500; }
 /* Appui sur une carte + arrivée sur l'accueil */
+[class*="st-key-tool_"] .hub-tile { transition: transform .3s cubic-bezier(.2,.8,.2,1); }
+[class*="st-key-tool_"]:hover .hub-tile { transform: scale(1.08) rotate(-3deg); }
+[class*="st-key-tool_"] [data-testid="stPageLink"] a [data-testid="stIconMaterial"] { transition: transform .25s ease; }
+[class*="st-key-tool_"]:hover [data-testid="stPageLink"] a [data-testid="stIconMaterial"] { transform: translateX(4px); }
 [class*="st-key-tool_"]:active { transform: scale(.975); transition-duration: .08s; }
 @keyframes hubIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
-.hub-hero > div { animation: hubIn .7s cubic-bezier(.2,.8,.2,1) both; }
-.hub-cat, [class*="st-key-tool_"] { animation: hubIn .6s .12s cubic-bezier(.2,.8,.2,1) both; }
+.hub-hero > div { animation: hubIn .7s cubic-bezier(.2,.8,.2,1) backwards; }
+/* backwards et pas both : une fois finie, l'animation ne bloque plus le transform du survol */
+.hub-cat, [class*="st-key-tool_"] { animation: hubIn .6s .12s cubic-bezier(.2,.8,.2,1) backwards; }
 @media (prefers-reduced-motion: reduce) {
   .hub-hero > div, .hub-cat, [class*="st-key-tool_"] { animation: none; }
 }
