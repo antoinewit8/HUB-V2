@@ -105,6 +105,10 @@ st.markdown("""
 .hub-cat, .st-key-hub_pills { animation: hubIn .6s .12s cubic-bezier(.2,.8,.2,1) backwards; }
 @keyframes hubCard { from { opacity: 0; transform: translateY(26px) scale(.96); } to { opacity: 1; transform: none; } }
 [class*="st-key-tool_"] { animation: hubCard .7s .2s cubic-bezier(.2,.8,.2,1) backwards; }
+/* Retour depuis un outil : l'accueil se construit sous un voile, animations en pause
+   jusqu'à ce que tout soit prêt (classe posée/retirée par le JS de transition) */
+html.hub-hold .hub-hero > div, html.hub-hold .hub-cat, html.hub-hold .st-key-hub_pills,
+html.hub-hold [class*="st-key-tool_"] { animation-play-state: paused !important; }
 @media (prefers-reduced-motion: reduce) {
   .hub-hero > div, .hub-cat, .st-key-hub_pills, [class*="st-key-tool_"] { animation: none; }
   [class*="st-key-tool_"]::before { display: none; }
@@ -192,46 +196,90 @@ _TRANSITION_JS = """
 (() => {
   if (window.__hubAnim) return;
   window.__hubAnim = true;
-  const doc = document;
+  const doc = document, html = doc.documentElement;
   const EASE = 'cubic-bezier(.32,.72,0,1)';
+  const OUT = 'cubic-bezier(.2,.8,.2,1)';
+  const NIGHT = '#0c1a2c';
+  const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Toutes les animations ci-dessous ne touchent qu'à transform et opacity : le navigateur
+  // les joue sur la carte graphique, elles restent fluides même quand Streamlit bloque la
+  // page pendant qu'il construit la suivante (130 à 380 ms mesurés).
+
+  // Attend que la page cible soit là, que Streamlit ait fini de la construire (nombre
+  // d'éléments stable, plus d'élément périmé) et que le navigateur respire (images < 40 ms),
+  // le tout pendant ~150 ms d'affilée. Sinon, des éléments remplacés après coup relancent
+  // leurs animations et la page clignote.
+  function whenReady(test, cb, maxMs = 8000) {
+    const t0 = performance.now();
+    let last = t0, since = 0, prevN = -1;
+    (function f(now) {
+      const dt = now - last; last = now;
+      const n = doc.querySelectorAll('[data-testid="stMain"] *').length;
+      const ok = test() && dt < 40 && n === prevN && !doc.querySelector('[data-stale="true"]');
+      prevN = n;
+      since = ok ? (since || now) : 0;
+      if ((since && now - since > 150) || now - t0 > maxMs) return cb();
+      requestAnimationFrame(f);
+    })(t0);
+  }
+
+  function layer(css) {
+    const el = doc.createElement('div');
+    el.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;' + css;
+    return el;
+  }
 
   function revealTool() {
     const blk = doc.querySelector('[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"]');
     if (!blk) return;
     [...blk.children].filter(el => el.offsetHeight > 0).slice(0, 10).forEach((el, i) => {
-      el.animate([{ opacity: 0, transform: 'translateY(18px)' }, { opacity: 1, transform: 'none' }],
-                 { duration: 560, delay: 40 + i * 45, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+      el.animate([{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
+                 { duration: 520, delay: i * 40, easing: OUT, fill: 'backwards' });
     });
   }
 
+  // ─── Accueil → outil : la carte s'ouvre en plein écran ───
   doc.addEventListener('click', (e) => {
     if (window.__hubGo) return;
     const a = e.target.closest('[class*="st-key-tool_"] [data-testid="stPageLink"] a');
-    if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || calm()) return;
     const card = a.closest('[class*="st-key-tool_"]');
     e.preventDefault(); e.stopPropagation();
 
-    const r = card.getBoundingClientRect();
-    const ov = doc.createElement('div');
-    Object.assign(ov.style, {
-      position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px',
-      borderRadius: '20px', background: '#fff', zIndex: 999999, pointerEvents: 'none', overflow: 'hidden',
-      boxShadow: '0 30px 80px rgba(0,0,0,.35)'
-    });
+    const r = card.getBoundingClientRect(), W = innerWidth, H = innerHeight;
+    const sx = r.width / W, sy = r.height / H;
+    const root = layer(`width:${W}px;height:${H}px;z-index:999999;`);
+
+    // Fond qui grandit : élément plein écran réduit à la taille de la carte par transform.
+    // Rayon en ellipse (rx/ry) pour que l'arrondi reste à 20 px malgré l'échelle non uniforme.
+    const bg = layer(`width:${W}px;height:${H}px;background:#f5f5f7;transform-origin:0 0;overflow:hidden;`
+      + `border-radius:${20 / sx}px / ${20 / sy}px;will-change:transform;`);
+    const white = layer(`width:100%;height:100%;position:absolute;background:#fff;`);
+    bg.appendChild(white);
+    root.appendChild(bg);
+    // Fond plein écran qui apparaît en fin d'ouverture et efface les coins arrondis
+    // (plutôt que d'animer border-radius, qui forcerait à redessiner à chaque image)
+    const full = layer(`width:${W}px;height:${H}px;background:#f5f5f7;opacity:0;will-change:opacity;`);
+    root.appendChild(full);
+
+    // Contenu de la carte, à sa place, qui s'efface
     const inner = card.querySelector('.hub-card');
     if (inner) {
       const c = inner.cloneNode(true);
-      c.style.cssText = 'padding:22px 22px 0;font-family:inherit';
-      ov.appendChild(c);
-      c.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-out', fill: 'forwards' });
+      c.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;padding:22px 22px 0;`
+        + 'box-sizing:border-box;font-family:inherit;will-change:opacity,transform;';
+      root.appendChild(c);
+      c.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(1.04)' }],
+                { duration: 180, easing: 'ease-out', fill: 'forwards' });
     }
-    // Écran de lancement : icône + nom de l'outil au centre, visible si l'outil met du temps à charger
+
+    // Écran de lancement : icône + nom au centre
     const tile = card.querySelector('.hub-tile'), name = card.querySelector('.hub-card .t');
     if (tile) {
-      const sp = doc.createElement('div');
-      sp.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;'
-        + 'justify-content:center;gap:18px;opacity:0;font-family:-apple-system,BlinkMacSystemFont,Inter,sans-serif';
+      const sp = layer(`width:${W}px;height:${H}px;display:flex;flex-direction:column;align-items:center;`
+        + 'justify-content:center;gap:18px;opacity:0;will-change:opacity,transform;'
+        + 'font-family:-apple-system,BlinkMacSystemFont,Inter,sans-serif;');
       const t = tile.cloneNode(true);
       t.style.transform = 'scale(1.6)'; t.style.borderRadius = '14px';
       sp.appendChild(t);
@@ -241,36 +289,58 @@ _TRANSITION_JS = """
         n.style.cssText = 'margin-top:14px;font-size:22px;font-weight:600;letter-spacing:-.02em;color:#1d1d1f';
         sp.appendChild(n);
       }
-      ov.appendChild(sp);
-      sp.animate([{ opacity: 0, transform: 'scale(.92)' }, { opacity: 1, transform: 'none' }],
-                 { duration: 420, delay: 300, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+      root.appendChild(sp);
+      sp.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }],
+                 { duration: 300, delay: 180, easing: OUT, fill: 'forwards' });
     }
-    doc.body.appendChild(ov);
+    doc.body.appendChild(root);
     card.style.visibility = 'hidden';
 
-    ov.animate([
-      { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px',
-        borderRadius: '20px', backgroundColor: '#ffffff' },
-      { left: '0px', top: '0px', width: innerWidth + 'px', height: innerHeight + 'px',
-        borderRadius: '0px', backgroundColor: '#f5f5f7' }
-    ], { duration: 540, easing: EASE, fill: 'forwards' });
+    bg.animate([{ transform: `translate(${r.left}px, ${r.top}px) scale(${sx}, ${sy})` }, { transform: 'none' }],
+               { duration: 460, easing: EASE, fill: 'forwards' });
+    full.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140, delay: 340, easing: 'ease-out', fill: 'forwards' });
+    white.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 360, delay: 80, easing: 'ease-out', fill: 'forwards' });
 
-    // La navigation démarre pendant l'animation : le chargement se fait en parallèle.
-    setTimeout(() => { window.__hubGo = true; try { a.click(); } finally { window.__hubGo = false; } }, 90);
+    // Navigation lancée une fois la carte quasi ouverte : Streamlit bloque la page 100 à 400 ms
+    // quand il construit la suivante, et ce blocage figerait l'agrandissement s'il tombait pendant.
+    setTimeout(() => { window.__hubGo = true; try { a.click(); } finally { window.__hubGo = false; } }, 440);
 
     const t0 = performance.now();
-    (function wait() {
-      const arrived = doc.querySelector('.ap-hero') && !doc.querySelector('.hub-hero');
-      const dt = performance.now() - t0;
-      if ((arrived && dt > 700) || dt > 8000) {
-        revealTool();
-        ov.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, easing: 'ease-out', fill: 'forwards' })
-          .onfinish = () => ov.remove();
-        card.style.visibility = '';
-        return;
-      }
-      setTimeout(wait, 40);
-    })();
+    whenReady(() => doc.querySelector('.ap-hero') && !doc.querySelector('.hub-hero')
+                    && performance.now() - t0 > 560, () => {
+      revealTool();
+      root.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 280, easing: 'ease-out', fill: 'forwards' })
+        .onfinish = () => root.remove();
+      card.style.visibility = '';
+    });
+  }, true);
+
+  // ─── Outil → accueil : fondu bleu nuit, puis cascade une fois l'accueil prêt ───
+  doc.addEventListener('click', (e) => {
+    if (window.__hubBack) return;
+    const a = e.target.closest('.st-key-hub_topbar [data-testid="stPageLink"] a');
+    if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || calm()) return;
+    e.preventDefault(); e.stopPropagation();
+
+    // Contenu de l'outil qui recule légèrement, voile bleu nuit par-dessus
+    const main = doc.querySelector('[data-testid="stMainBlockContainer"]');
+    if (main) main.animate([{ transform: 'none', opacity: 1 }, { transform: 'scale(.97)', opacity: .6 }],
+                           { duration: 260, easing: OUT, fill: 'forwards' });
+    const cover = layer(`width:100vw;height:100vh;z-index:999999;background:${NIGHT};opacity:0;will-change:opacity;`);
+    doc.body.appendChild(cover);
+    cover.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, easing: 'ease-out', fill: 'forwards' });
+    html.classList.add('hub-hold');   // l'accueil se construit sous le voile, animations en pause
+
+    // Navigation une fois le voile posé : le blocage de Streamlit se passe derrière
+    setTimeout(() => { window.__hubBack = true; try { a.click(); } finally { window.__hubBack = false; } }, 250);
+
+    const t0 = performance.now();
+    whenReady(() => doc.querySelector('.hub-foot') && !doc.querySelector('.ap-hero')
+                    && performance.now() - t0 > 300, () => {
+      html.classList.remove('hub-hold');
+      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 360, easing: 'ease-out', fill: 'forwards' })
+        .onfinish = () => cover.remove();
+    });
   }, true);
 })();
 
