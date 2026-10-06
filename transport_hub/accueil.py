@@ -62,6 +62,14 @@ st.markdown("""
 [class*="st-key-tool_"] [data-testid="stPageLink"] a p,
 [class*="st-key-tool_"] [data-testid="stPageLink"] a span { color: var(--ap-blue) !important; font-size: 14px;
   font-weight: 500; }
+/* Appui sur une carte + arrivée sur l'accueil */
+[class*="st-key-tool_"]:active { transform: scale(.975); transition-duration: .08s; }
+@keyframes hubIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+.hub-hero > div { animation: hubIn .7s cubic-bezier(.2,.8,.2,1) both; }
+.hub-cat, [class*="st-key-tool_"] { animation: hubIn .6s .12s cubic-bezier(.2,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .hub-hero > div, .hub-cat, [class*="st-key-tool_"] { animation: none; }
+}
 .hub-foot { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid rgba(255,255,255,.12);
   font-size: 12px; color: rgba(255,255,255,.5); display: flex; justify-content: space-between; }
 </style>
@@ -121,3 +129,100 @@ for cat_key, (cat_label, color) in ui.CATEGORIES.items():
 
 st.markdown('<div class="hub-foot"><span>Transport Hub · CB Groupe</span>'
             '<span>Usage interne</span></div>', unsafe_allow_html=True)
+
+# ─── Transition vers un outil ────────────────────────────────────────────────
+# Au clic, la carte s'agrandit jusqu'à remplir l'écran (effet ouverture d'app iOS),
+# puis le contenu de l'outil apparaît par vagues. Script installé une seule fois
+# sur le document : il reste actif quand on change de page.
+_TRANSITION_JS = """
+<script>
+(() => {
+  if (window.__hubAnim) return;
+  window.__hubAnim = true;
+  const doc = document;
+  const EASE = 'cubic-bezier(.32,.72,0,1)';
+
+  function revealTool() {
+    const blk = doc.querySelector('[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"]');
+    if (!blk) return;
+    [...blk.children].filter(el => el.offsetHeight > 0).slice(0, 10).forEach((el, i) => {
+      el.animate([{ opacity: 0, transform: 'translateY(18px)' }, { opacity: 1, transform: 'none' }],
+                 { duration: 560, delay: 40 + i * 45, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+    });
+  }
+
+  doc.addEventListener('click', (e) => {
+    if (window.__hubGo) return;
+    const a = e.target.closest('[class*="st-key-tool_"] [data-testid="stPageLink"] a');
+    if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const card = a.closest('[class*="st-key-tool_"]');
+    e.preventDefault(); e.stopPropagation();
+
+    const r = card.getBoundingClientRect();
+    const ov = doc.createElement('div');
+    Object.assign(ov.style, {
+      position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px',
+      borderRadius: '20px', background: '#fff', zIndex: 999999, pointerEvents: 'none', overflow: 'hidden',
+      boxShadow: '0 30px 80px rgba(0,0,0,.35)'
+    });
+    const inner = card.querySelector('.hub-card');
+    if (inner) {
+      const c = inner.cloneNode(true);
+      c.style.cssText = 'padding:22px 22px 0;font-family:inherit';
+      ov.appendChild(c);
+      c.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-out', fill: 'forwards' });
+    }
+    // Écran de lancement : icône + nom de l'outil au centre, visible si l'outil met du temps à charger
+    const tile = card.querySelector('.hub-tile'), name = card.querySelector('.hub-card .t');
+    if (tile) {
+      const sp = doc.createElement('div');
+      sp.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;'
+        + 'justify-content:center;gap:18px;opacity:0;font-family:-apple-system,BlinkMacSystemFont,Inter,sans-serif';
+      const t = tile.cloneNode(true);
+      t.style.transform = 'scale(1.6)'; t.style.borderRadius = '14px';
+      sp.appendChild(t);
+      if (name) {
+        const n = doc.createElement('div');
+        n.textContent = name.textContent;
+        n.style.cssText = 'margin-top:14px;font-size:22px;font-weight:600;letter-spacing:-.02em;color:#1d1d1f';
+        sp.appendChild(n);
+      }
+      ov.appendChild(sp);
+      sp.animate([{ opacity: 0, transform: 'scale(.92)' }, { opacity: 1, transform: 'none' }],
+                 { duration: 420, delay: 300, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+    }
+    doc.body.appendChild(ov);
+    card.style.visibility = 'hidden';
+
+    ov.animate([
+      { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px',
+        borderRadius: '20px', backgroundColor: '#ffffff' },
+      { left: '0px', top: '0px', width: innerWidth + 'px', height: innerHeight + 'px',
+        borderRadius: '0px', backgroundColor: '#f5f5f7' }
+    ], { duration: 540, easing: EASE, fill: 'forwards' });
+
+    // La navigation démarre pendant l'animation : le chargement se fait en parallèle.
+    setTimeout(() => { window.__hubGo = true; try { a.click(); } finally { window.__hubGo = false; } }, 90);
+
+    const t0 = performance.now();
+    (function wait() {
+      const arrived = doc.querySelector('.ap-hero') && !doc.querySelector('.hub-hero');
+      const dt = performance.now() - t0;
+      if ((arrived && dt > 700) || dt > 8000) {
+        revealTool();
+        ov.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, easing: 'ease-out', fill: 'forwards' })
+          .onfinish = () => ov.remove();
+        card.style.visibility = '';
+        return;
+      }
+      setTimeout(wait, 40);
+    })();
+  }, true);
+})();
+</script>
+"""
+try:
+    st.html(_TRANSITION_JS, unsafe_allow_javascript=True)
+except TypeError:  # Streamlit trop ancien : pas d'animation, navigation normale
+    pass
