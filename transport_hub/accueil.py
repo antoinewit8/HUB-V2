@@ -230,88 +230,100 @@ _TRANSITION_JS = """
     return el;
   }
 
-  function revealTool() {
+  // Contenu de l'outil qui apparaît par vagues. Le bloc qui contient `still` (le titre, où
+  // l'icône vient se poser) n'a qu'un fondu : s'il glissait, l'icône viserait une cible mobile.
+  function revealTool(still) {
     const blk = doc.querySelector('[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"]');
     if (!blk) return;
     [...blk.children].filter(el => el.offsetHeight > 0).slice(0, 10).forEach((el, i) => {
-      el.animate([{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
+      const fixed = still && el.contains(still);
+      el.animate(fixed ? [{ opacity: 0 }, { opacity: 1 }]
+                       : [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
                  { duration: 520, delay: i * 40, easing: OUT, fill: 'backwards' });
     });
   }
 
-  // ─── Accueil → outil : la carte s'ouvre en plein écran ───
+  // ─── Accueil → outil ───
+  // 1. fondu doux vers le bleu nuit de l'accueil
+  // 2. le pictogramme se dessine trait par trait au centre, avec le nom de l'outil
+  // 3. il pulse pendant que Streamlit charge l'outil
+  // 4. l'écran de couleur s'efface, le pictogramme s'envole en grossissant, l'outil apparaît
   doc.addEventListener('click', (e) => {
     if (window.__hubGo) return;
     const a = e.target.closest('[class*="st-key-tool_"] [data-testid="stPageLink"] a');
     if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || calm()) return;
     const card = a.closest('[class*="st-key-tool_"]');
+    const tile = card.querySelector('.hub-tile');
+    if (!tile) return;
     e.preventDefault(); e.stopPropagation();
 
-    const r = card.getBoundingClientRect(), W = innerWidth, H = innerHeight;
-    const sx = r.width / W, sy = r.height / H;
+    const W = innerWidth, H = innerHeight;
+    const color = getComputedStyle(tile).backgroundColor;   // couleur de la catégorie : sert à l'icône
+    const SOFT = 'cubic-bezier(.45,0,.25,1)';                // ease-in-out doux pour les fondus
     const root = layer(`width:${W}px;height:${H}px;z-index:999999;`);
 
-    // Fond qui grandit : élément plein écran réduit à la taille de la carte par transform.
-    // Rayon en ellipse (rx/ry) pour que l'arrondi reste à 20 px malgré l'échelle non uniforme.
-    const bg = layer(`width:${W}px;height:${H}px;background:#f5f5f7;transform-origin:0 0;overflow:hidden;`
-      + `border-radius:${20 / sx}px / ${20 / sy}px;will-change:transform;`);
-    const white = layer(`width:100%;height:100%;position:absolute;background:#fff;`);
-    bg.appendChild(white);
-    root.appendChild(bg);
-    // Fond plein écran qui apparaît en fin d'ouverture et efface les coins arrondis
-    // (plutôt que d'animer border-radius, qui forcerait à redessiner à chaque image)
-    const full = layer(`width:${W}px;height:${H}px;background:#f5f5f7;opacity:0;will-change:opacity;`);
-    root.appendChild(full);
+    // Fond : fondu plein écran vers le bleu nuit de l'accueil (opacité seule, accélérée)
+    const full = layer(`width:${W}px;height:${H}px;background:${NIGHT};opacity:0;will-change:opacity;`);
+    root.append(full);
 
-    // Contenu de la carte, à sa place, qui s'efface
-    const inner = card.querySelector('.hub-card');
-    if (inner) {
-      const c = inner.cloneNode(true);
-      c.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;padding:22px 22px 0;`
-        + 'box-sizing:border-box;font-family:inherit;will-change:opacity,transform;';
-      root.appendChild(c);
-      c.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(1.04)' }],
-                { duration: 180, easing: 'ease-out', fill: 'forwards' });
-    }
-
-    // Écran de lancement : icône + nom au centre
-    const tile = card.querySelector('.hub-tile'), name = card.querySelector('.hub-card .t');
-    if (tile) {
-      const sp = layer(`width:${W}px;height:${H}px;display:flex;flex-direction:column;align-items:center;`
-        + 'justify-content:center;gap:18px;opacity:0;will-change:opacity,transform;'
-        + 'font-family:-apple-system,BlinkMacSystemFont,Inter,sans-serif;');
-      const t = tile.cloneNode(true);
-      t.style.transform = 'scale(1.6)'; t.style.borderRadius = '14px';
-      sp.appendChild(t);
-      if (name) {
-        const n = doc.createElement('div');
-        n.textContent = name.textContent;
-        n.style.cssText = 'margin-top:14px;font-size:22px;font-weight:600;letter-spacing:-.02em;color:#1d1d1f';
-        sp.appendChild(n);
-      }
-      root.appendChild(sp);
-      sp.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }],
-                 { duration: 300, delay: 180, easing: OUT, fill: 'forwards' });
-    }
+    // Pictogramme dessiné à sa taille réelle (net), chaque trait se trace l'un après l'autre
+    const S = 104;
+    const sp = layer(`width:${W}px;height:${H}px;display:flex;flex-direction:column;align-items:center;`
+      + 'justify-content:center;gap:22px;font-family:-apple-system,BlinkMacSystemFont,Inter,sans-serif;');
+    const ico = doc.createElement('div');
+    ico.style.cssText = `width:${S}px;height:${S}px;will-change:transform,opacity;`;
+    const src = tile.querySelector('svg');
+    const svg = src ? src.cloneNode(true) : doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', S); svg.setAttribute('height', S);
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke', color);                       // seule l'icône prend la couleur de l'outil
+    svg.style.display = 'block';
+    const strokes = [...svg.querySelectorAll('path, circle, rect, line, polyline, polygon, ellipse')];
+    // Trait caché au départ (opacité 0) : sinon ses bouts arrondis apparaissent déjà en petits points
+    strokes.forEach(el => { el.setAttribute('pathLength', '1');
+                            el.style.strokeDasharray = '1 1'; el.style.strokeDashoffset = '1'; el.style.opacity = '0'; });
+    ico.appendChild(svg);
+    const nm = card.querySelector('.hub-card .t');
+    const label = doc.createElement('div');
+    label.textContent = nm ? nm.textContent : '';
+    label.style.cssText = 'font-size:24px;font-weight:600;letter-spacing:-.02em;color:#fff;opacity:0;'
+      + 'will-change:opacity,transform;';
+    sp.append(ico, label);
+    root.appendChild(sp);
     doc.body.appendChild(root);
-    card.style.visibility = 'hidden';
 
-    bg.animate([{ transform: `translate(${r.left}px, ${r.top}px) scale(${sx}, ${sy})` }, { transform: 'none' }],
-               { duration: 460, easing: EASE, fill: 'forwards' });
-    full.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140, delay: 340, easing: 'ease-out', fill: 'forwards' });
-    white.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 360, delay: 80, easing: 'ease-out', fill: 'forwards' });
+    full.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 420, easing: SOFT, fill: 'forwards' });
 
-    // Navigation lancée une fois la carte quasi ouverte : Streamlit bloque la page 100 à 400 ms
-    // quand il construit la suivante, et ce blocage figerait l'agrandissement s'il tombait pendant.
-    setTimeout(() => { window.__hubGo = true; try { a.click(); } finally { window.__hubGo = false; } }, 440);
+    // Tracé : ~450 ms au total, traits décalés
+    const DRAW0 = 260, per = Math.min(300, 420 / Math.max(1, strokes.length));
+    strokes.forEach((el, i) => el.animate([{ strokeDashoffset: 1, opacity: 0 }, { opacity: 1, offset: .08 },
+                                           { strokeDashoffset: 0, opacity: 1 }],
+      { duration: 300, delay: DRAW0 + i * per * .6, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' }));
+    const drawEnd = DRAW0 + (strokes.length - 1) * per * .6 + 300;
+    label.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+                  { duration: 360, delay: DRAW0 + 120, easing: OUT, fill: 'forwards' });
+
+    // Pulsation pendant le chargement (transform seul : continue même si la page est occupée)
+    let pulse = null;
+    setTimeout(() => {
+      pulse = ico.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.07)' }, { transform: 'scale(1)' }],
+                          { duration: 1100, iterations: Infinity, easing: 'ease-in-out' });
+    }, drawEnd);
+
+    // Navigation une fois le tracé fini : le tracé passe par le fil principal, que Streamlit
+    // bloque 100 à 400 ms en construisant la page suivante.
+    setTimeout(() => { window.__hubGo = true; try { a.click(); } finally { window.__hubGo = false; } }, drawEnd + 20);
 
     const t0 = performance.now();
     whenReady(() => doc.querySelector('.ap-hero') && !doc.querySelector('.hub-hero')
-                    && performance.now() - t0 > 560, () => {
+                    && performance.now() - t0 > drawEnd + 200, () => {
       revealTool();
-      root.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 280, easing: 'ease-out', fill: 'forwards' })
-        .onfinish = () => root.remove();
-      card.style.visibility = '';
+      if (pulse) pulse.cancel();
+      ico.animate([{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(1.5)', opacity: 0 }],
+                  { duration: 380, easing: 'cubic-bezier(.4,0,1,1)', fill: 'forwards' });
+      label.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-out', fill: 'forwards' });
+      full.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 520, delay: 60, easing: SOFT, fill: 'forwards' });
+      setTimeout(() => root.remove(), 620);
     });
   }, true);
 
@@ -324,21 +336,24 @@ _TRANSITION_JS = """
 
     // Contenu de l'outil qui recule légèrement, voile bleu nuit par-dessus
     const main = doc.querySelector('[data-testid="stMainBlockContainer"]');
-    if (main) main.animate([{ transform: 'none', opacity: 1 }, { transform: 'scale(.97)', opacity: .6 }],
-                           { duration: 260, easing: OUT, fill: 'forwards' });
+    const recul = main && main.animate([{ transform: 'none', opacity: 1 }, { transform: 'scale(.97)', opacity: .6 }],
+                                       { duration: 260, easing: OUT, fill: 'forwards' });
     const cover = layer(`width:100vw;height:100vh;z-index:999999;background:${NIGHT};opacity:0;will-change:opacity;`);
     doc.body.appendChild(cover);
-    cover.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, easing: 'ease-out', fill: 'forwards' });
+    cover.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' });
     html.classList.add('hub-hold');   // l'accueil se construit sous le voile, animations en pause
 
     // Navigation une fois le voile posé : le blocage de Streamlit se passe derrière
-    setTimeout(() => { window.__hubBack = true; try { a.click(); } finally { window.__hubBack = false; } }, 250);
+    setTimeout(() => { window.__hubBack = true; try { a.click(); } finally { window.__hubBack = false; } }, 310);
 
     const t0 = performance.now();
     whenReady(() => doc.querySelector('.hub-foot') && !doc.querySelector('.ap-hero')
                     && performance.now() - t0 > 300, () => {
+      // Le conteneur principal est réutilisé par Streamlit d'une page à l'autre : sans ça,
+      // l'accueil resterait à 97 % et 60 % d'opacité (page floue et délavée)
+      if (recul) recul.cancel();
       html.classList.remove('hub-hold');
-      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 360, easing: 'ease-out', fill: 'forwards' })
+      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 480, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' })
         .onfinish = () => cover.remove();
     });
   }, true);
