@@ -37,17 +37,47 @@ st.markdown("""
   .hub-hero h1 { font-size: 46px !important; }
 }
 
+/* Barre de pastilles par catégorie (collante, verre dépoli une fois collée) */
+/* Streamlit enveloppe le conteneur dans un stLayoutWrapper : c'est lui qui doit coller */
+[data-testid="stLayoutWrapper"]:has(> .st-key-hub_pills) { position: sticky; top: 22px; z-index: 50; }
+.st-key-hub_pills { margin: -.6rem 0 .4rem; width: fit-content;
+  max-width: 100%; padding: 6px; border-radius: 980px; transition: background .3s ease, box-shadow .3s ease; }
+.st-key-hub_pills.stuck { background: rgba(12,26,44,.62); -webkit-backdrop-filter: saturate(160%) blur(18px);
+  backdrop-filter: saturate(160%) blur(18px); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 10px 30px rgba(0,0,0,.35); }
+.st-key-hub_pills [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+.hub-pills { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.hub-pills::-webkit-scrollbar { display: none; }
+.hub-pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 980px;
+  font-size: 14px; font-weight: 500; white-space: nowrap; text-decoration: none !important; cursor: pointer;
+  color: rgba(255,255,255,.86) !important; background: rgba(255,255,255,.08);
+  transition: background .25s ease, color .25s ease, transform .15s ease; }
+.hub-pill:hover { background: rgba(255,255,255,.16); }
+.hub-pill:active { transform: scale(.96); }
+.hub-pill i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.hub-pill span { color: rgba(255,255,255,.5); font-weight: 400; transition: color .25s ease; }
+.hub-pill.on { background: #fff; color: #1d1d1f !important; }
+.hub-pill.on span { color: #6e6e73; }
+
 /* Catégories */
-.hub-cat { display: flex; align-items: baseline; gap: 12px; margin: 2.2rem 0 .9rem; }
+.hub-cat { display: flex; align-items: baseline; gap: 12px; margin: 2.2rem 0 .9rem; scroll-margin-top: 84px; }
 .hub-cat .t { font-size: 26px !important; font-weight: 600; letter-spacing: -0.02em; margin: 0; padding: 0; color: #fff; }
 .hub-cat .n { font-size: 14px; color: rgba(255,255,255,.55); }
 
 /* Cartes outils : toute la carte est cliquable */
 [class*="st-key-tool_"] { position: relative; background: #fff; border-radius: 20px; padding: 22px 22px 16px;
   box-shadow: 0 1px 2px rgba(0,0,0,.2), 0 8px 24px rgba(0,0,0,.18); min-height: 196px; gap: 0 !important;
-  transition: transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .25s ease; }
+  transition: transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .3s ease; --hub-c: #0071e3; --mx: 50%; --my: 0%; }
+/* Survol : halo de la couleur de la catégorie */
 [class*="st-key-tool_"]:hover { transform: translateY(-5px);
-  box-shadow: 0 2px 4px rgba(0,0,0,.2), 0 16px 40px rgba(0,0,0,.32); }
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--hub-c) 70%, transparent),
+              0 0 32px 2px color-mix(in srgb, var(--hub-c) 45%, transparent),
+              0 18px 44px rgba(0,0,0,.34); }
+/* Reflet qui suit la souris (position mise à jour en JS via --mx / --my) */
+[class*="st-key-tool_"]::before { content: ""; position: absolute; inset: 0; border-radius: 20px; z-index: 1;
+  pointer-events: none; opacity: 0; transition: opacity .3s ease;
+  background: radial-gradient(280px circle at var(--mx) var(--my),
+              color-mix(in srgb, var(--hub-c) 10%, transparent), transparent 70%); }
+[class*="st-key-tool_"]:hover::before { opacity: 1; }
 [class*="st-key-tool_"] * { position: static !important; }
 [class*="st-key-tool_"] [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
 .hub-card { padding-bottom: 14px; }
@@ -70,10 +100,14 @@ st.markdown("""
 [class*="st-key-tool_"]:active { transform: scale(.975); transition-duration: .08s; }
 @keyframes hubIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 .hub-hero > div { animation: hubIn .7s cubic-bezier(.2,.8,.2,1) backwards; }
-/* backwards et pas both : une fois finie, l'animation ne bloque plus le transform du survol */
-.hub-cat, [class*="st-key-tool_"] { animation: hubIn .6s .12s cubic-bezier(.2,.8,.2,1) backwards; }
+/* Cascade : chaque carte reçoit son propre délai (voir _CARD_CSS plus bas).
+   backwards et pas both : une fois finie, l'animation ne bloque plus le transform du survol */
+.hub-cat, .st-key-hub_pills { animation: hubIn .6s .12s cubic-bezier(.2,.8,.2,1) backwards; }
+@keyframes hubCard { from { opacity: 0; transform: translateY(26px) scale(.96); } to { opacity: 1; transform: none; } }
+[class*="st-key-tool_"] { animation: hubCard .7s .2s cubic-bezier(.2,.8,.2,1) backwards; }
 @media (prefers-reduced-motion: reduce) {
-  .hub-hero > div, .hub-cat, [class*="st-key-tool_"] { animation: none; }
+  .hub-hero > div, .hub-cat, .st-key-hub_pills, [class*="st-key-tool_"] { animation: none; }
+  [class*="st-key-tool_"]::before { display: none; }
 }
 .hub-foot { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid rgba(255,255,255,.12);
   font-size: 12px; color: rgba(255,255,255,.5); display: flex; justify-content: space-between; }
@@ -117,13 +151,27 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-for cat_key, (cat_label, color) in ui.CATEGORIES.items():
-    outils = [t for t in ui.TOOLS if t["cat"] == cat_key]
-    if not outils:
-        continue
+CATS = [(k, lbl, col, [t for t in ui.TOOLS if t["cat"] == k]) for k, (lbl, col) in ui.CATEGORIES.items()]
+CATS = [c for c in CATS if c[3]]
+
+# Barre de pastilles : un clic fait défiler jusqu'à la catégorie (géré en JS plus bas)
+with st.container(key="hub_pills"):
+    st.markdown('<nav class="hub-pills">' + "".join(
+        f'<a class="hub-pill" href="#cat-{k}" data-cat="{k}"><i style="background:{col}"></i>{lbl}<span>{len(o)}</span></a>'
+        for k, lbl, col, o in CATS) + "</nav>", unsafe_allow_html=True)
+
+# Couleur de catégorie + délai de cascade propres à chaque carte
+_CARD_CSS, i = [], 0
+for k, lbl, col, outils in CATS:
+    for t in outils:
+        _CARD_CSS.append(f'.st-key-tool_{t["key"]} {{ --hub-c: {col}; animation-delay: {0.2 + min(i, 14) * 0.05:.2f}s; }}')
+        i += 1
+st.markdown("<style>" + "\n".join(_CARD_CSS) + "</style>", unsafe_allow_html=True)
+
+for cat_key, cat_label, color, outils in CATS:
     n = len(outils)
-    st.markdown(f'<div class="hub-cat"><div class="t">{cat_label}</div><div class="n">{n} outil{"s" if n > 1 else ""}</div></div>',
-                unsafe_allow_html=True)
+    st.markdown(f'<div class="hub-cat" id="cat-{cat_key}" data-cat="{cat_key}"><div class="t">{cat_label}</div>'
+                f'<div class="n">{n} outil{"s" if n > 1 else ""}</div></div>', unsafe_allow_html=True)
     for start in range(0, n, 3):
         cols = st.columns(3, gap="medium")
         for col, t in zip(cols, outils[start:start + 3]):
@@ -224,6 +272,70 @@ _TRANSITION_JS = """
       setTimeout(wait, 40);
     })();
   }, true);
+})();
+
+// ─── Effets de l'accueil : reflet, pastilles ───
+(() => {
+  if (window.__hubFx) return;
+  window.__hubFx = true;
+  const doc = document;
+
+  // Reflet : position de la souris relative à la carte survolée
+  let raf = 0, last = null;
+  doc.addEventListener('pointermove', (e) => {
+    last = e;
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      const card = last.target.closest && last.target.closest('[class*="st-key-tool_"]');
+      if (!card) return;
+      const r = card.getBoundingClientRect();
+      card.style.setProperty('--mx', (last.clientX - r.left) + 'px');
+      card.style.setProperty('--my', (last.clientY - r.top) + 'px');
+    });
+  }, { passive: true });
+
+  // Pastilles : défilement fluide vers la catégorie
+  doc.addEventListener('click', (e) => {
+    const p = e.target.closest('.hub-pill');
+    if (!p) return;
+    e.preventDefault();
+    const h = doc.getElementById('cat-' + p.dataset.cat);
+    if (h) h.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+                              block: 'start' });
+  }, true);
+
+  // Pastille active + barre en verre une fois collée
+  let tick = 0;
+  function update() {
+    tick = 0;
+    const bar = doc.querySelector('.st-key-hub_pills');
+    if (!bar) return;
+    const top = bar.getBoundingClientRect().top;
+    bar.classList.toggle('stuck', top <= 16);
+    const heads = [...doc.querySelectorAll('.hub-cat[data-cat]')];
+    let cur = heads[0]?.dataset.cat;
+    for (const h of heads) if (h.getBoundingClientRect().top < innerHeight * 0.35) cur = h.dataset.cat;
+    // Tout en bas : la dernière catégorie est active même si son titre n'atteint pas le seuil
+    const sc = doc.querySelector('[data-testid="stMain"]');
+    if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4 && heads.length) cur = heads.at(-1).dataset.cat;
+    doc.querySelectorAll('.hub-pill').forEach(p => {
+      const on = p.dataset.cat === cur;
+      if (on !== p.classList.contains('on')) {
+        p.classList.toggle('on', on);
+        // Pastille active visible dans la barre (mobile) — scrollTo et pas scrollIntoView,
+        // qui interromprait le défilement fluide de la page
+        const nav = p.parentElement;
+        if (on && nav.scrollWidth > nav.clientWidth)
+          nav.scrollTo({ left: p.offsetLeft - nav.clientWidth / 2 + p.offsetWidth / 2, behavior: 'smooth' });
+      }
+    });
+  }
+  const schedule = () => { if (!tick) tick = requestAnimationFrame(update); };
+  doc.addEventListener('scroll', schedule, { capture: true, passive: true });
+  addEventListener('resize', schedule);
+  new MutationObserver(schedule).observe(doc.body, { childList: true, subtree: true });
+  schedule();
 })();
 </script>
 """
