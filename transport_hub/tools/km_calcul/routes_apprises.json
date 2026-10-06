@@ -1,0 +1,247 @@
+[
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "BAD FALLINGBOSTEL, 29683, Germany",
+    "waypoints": [
+      "49.133280, 6.176332"
+    ],
+    "km_reference": 1333.2,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
+  },
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "HENNEF, 53773, Germany",
+    "waypoints": [
+      "47.808837, 5.234377"
+    ],
+    "km_reference": 1021.3,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
+  },
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "PLOUVIEN, 29860, France",
+    "waypoints": [
+      "43.826280, 4.503496",
+      "44.341265, 2.559977"
+    ],
+    "km_reference": 1140.4,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
+  },
+  {
+    "origine": "Gent, 9000, Belgium",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "48.250387, 2.217489"
+    ],
+    "km_reference": 461.6,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Rotterdam, 3029, Netherlands",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "51.437668, 4.720508",
+      "48.319750, 2.199109"
+    ],
+    "km_reference": 598.2,
+    "source": "carte_manuelle",
+    "date": "2026-06-05",
+    "confiance": 3
+  },
+  {
+    "origine": "Beneden-Leeuwen, 6588, Netherlands",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "49.747158, 2.788181",
+      "48.336365, 2.189705"
+    ],
+    "km_reference": 640.0,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Hermes, 60700, France",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "48.303707, 2.202690"
+    ],
+    "km_reference": 230.9,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Someren, 5711, Netherlands",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "48.282293, 2.208375"
+    ],
+    "km_reference": 609.3,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Algemesi, 46680, Spain",
+    "destination": "Hermes, 60370, France",
+    "waypoints": [
+      "44.751641, 3.289563"
+    ],
+    "km_reference": 1504.0,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Puerto De Sagunto, 46520, Spain",
+    "destination": "Hermes, 60370, France",
+    "waypoints": [
+      "44.913455, 3.223397"
+    ],
+    "km_reference": 1441.3,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Algemesi, 46680, Spain",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "44.157522, 3.024901"
+    ],
+    "km_reference": 1313.3,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Lleida, 25181, Spain",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "44.488556, 1.495984"
+    ],
+    "km_reference": 934.7,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Mollerussa, 25230, Spain",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "44.430188, 1.504866"
+    ],
+    "km_reference": 952.5,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Alicante, 03006, Spain",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "44.826337, 3.264772"
+    ],
+    "km_reference": 1445.2,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Madrid, 28050, Spain",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "45.828019, 0.193914"
+    ],
+    "km_reference": 1151.8,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
+  },
+  {
+    "origine": "Trebaseleghe, 35010, Italy",
+    "destination": "Saint-Martin-d'Abbat, 45110, France",
+    "waypoints": [],
+    "prohibited_countries": [
+      "CH"
+    ]
+  },
+  {
+    "origine": "Rotterdam, 3029, Netherlands",
+    "destination": "Hermes, 60370, France",
+    "waypoints": [
+      "51.433039, 4.713573"
+    ],
+    "km_reference": 420.1,
+    "source": "carte_manuelle",
+    "date": "2026-06-05",
+    "confiance": 1
+  },
+  {
+    "origine": "Laives, 39055, Italy",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "45.113070, 7.248392"
+    ],
+    "km_reference": 1104.2,
+    "source": "carte_manuelle",
+    "date": "2026-06-05",
+    "confiance": 1
+  },
+  {
+    "origine": "Bannans, 25560, France",
+    "destination": "Heerenveen, Pays-Bas",
+    "waypoints": [
+      "47.221020, 6.392549",
+      "47.515962, 6.416894",
+      "49.446012, 5.887837"
+    ],
+    "km_reference": 873.6,
+    "source": "carte_manuelle",
+    "date": "2026-09-17",
+    "confiance": 1
+  },
+  {
+    "origine": "Hoogeveen, Pays-Bas",
+    "destination": "Isigny-sur-Mer, 14230, France",
+    "waypoints": [
+      "50.142106, 2.103354",
+      "49.364971, 0.777005"
+    ],
+    "km_reference": 836.8,
+    "source": "carte_manuelle",
+    "date": "2026-09-17",
+    "confiance": 1
+  },
+  {
+    "origine": "BERMATINGEN, 88697, Germany",
+    "destination": "ROTTERDAM, 3198, Netherlands",
+    "waypoints": [
+      "49.426994, 5.917765"
+    ],
+    "km_reference": 779.7,
+    "source": "carte_manuelle",
+    "date": "2026-09-22",
+    "confiance": 1
+  },
+  {
+    "origine": "BERMATINGEN, 88697, Germany",
+    "destination": "NIEUWDORP, 4455 TE, Netherlands",
+    "waypoints": [
+      "49.438562, 5.892411"
+    ],
+    "km_reference": 763.4,
+    "source": "carte_manuelle",
+    "date": "2026-09-22",
+    "confiance": 1
+  }
+]

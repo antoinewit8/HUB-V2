@@ -1,0 +1,117 @@
+[
+  {
+    "origine": "Vauvert",
+    "destination": "Reims",
+    "waypoints": ["48.137082, 5.112482", "48.623138, 4.939370"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Vauvert",
+    "waypoints": ["48.623138, 4.939370", "48.137082, 5.112482"]
+  },
+  {
+    "origine": "Ouilly-du-Houley",
+    "destination": "Reims",
+    "waypoints": ["49.331566, 1.083665", "49.404338, 2.749771"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Champsac",
+    "waypoints": ["48.219841, 4.143188", "47.037544, 2.361356"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Domène",
+    "waypoints": ["48.621615, 4.943573", "48.135805, 5.111636"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Saint-Brandan",
+    "waypoints": ["48.745951, 1.370737", "48.453910, 0.111683"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Châteaurenard",
+    "waypoints": ["49.030449, 3.948046"]
+  },
+  {
+    "origine": "Plestan",
+    "destination": "Reims",
+    "waypoints": ["48.453786, 0.111922", "48.745931, 1.371374"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Sorgues",
+    "waypoints": ["48.623113, 4.939322"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Rosporden",
+    "waypoints": ["48.337981, -1.208402", "48.101814, -1.753569"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Hesdin-l'Abbé",
+    "waypoints": ["49.854068, 3.287262", "50.511952, 2.604825"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Bonneville",
+    "waypoints": ["48.622779, 4.940067"]
+  },
+  {
+    "origine": "Sérans",
+    "destination": "Reims",
+    "waypoints": ["49.405382, 2.754448"]
+  },
+  {
+    "origine": "Vauvert",
+    "destination": "Saint-Benoît-sur-Vannes",
+    "waypoints": ["47.332625, 5.107866"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Saint-Quentin-Fallavier",
+    "waypoints": []
+  },
+  {
+    "origine": "Reims",
+    "destination": "Roche-lez-Beaupré",
+    "waypoints": ["48.622469, 4.940820"]
+  },
+  {
+    "origine": "Saint-Malo",
+    "destination": "Reims",
+    "waypoints": ["48.745824, 1.374679"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Couchey",
+    "waypoints": ["48.622459, 4.940877"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Villers-les-Pots",
+    "waypoints": ["48.622447, 4.940891"]
+  },
+  {
+    "origine": "Vauvert",
+    "destination": "Nantes",
+    "waypoints": ["44.085258, 3.021722", "45.869029, 1.287710", "47.035626, -0.851141"]
+  },
+  {
+    "origine": "Vauvert",
+    "destination": "Guer",
+    "waypoints": ["44.085269, 3.021699", "45.869029, 1.287710", "47.035626, -0.851141"]
+  },
+  {
+    "origine": "Reims",
+    "destination": "Saint-Grégoire",
+    "waypoints": ["48.745859, 1.374366", "48.453912, 0.111357"]
+  },
+  {
+  "origine": "VilleDepart, CP, France",
+  "destination": "VilleArrivee, CP, Italy",
+  "waypoints": ["45.9200, 6.8950;r=1000", "45.9161, 7.0556;r=1000"]
+  }
+]
