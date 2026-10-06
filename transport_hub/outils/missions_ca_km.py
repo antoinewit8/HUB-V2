@@ -51,16 +51,23 @@ VEHICLE      = "EUR_TRAILER_TRUCK"
 #  IMPORTS excel_handler_km + ptv_router_km
 # ══════════════════════════════════════════════════════════════════
 
+import sys
+_KM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools", "km_calcul"))
+if _KM_DIR not in sys.path:
+    sys.path.insert(0, _KM_DIR)
+
+_IMPORT_ERR = ""
 try:
-    from excel_handler_km import (
+    from modules.excel_handler_km import (
         PAYS_MAP, CP_LENGTHS, ZONE_CORRECTIONS,
         CITY_CORRECTIONS, GPS_FIXES_ORIGIN,
         parse_origin_from_parts,
     )
-    from ptv_router_km import geocode_address as _ptv_geocode_address
+    from modules.ptv_router_km import geocode_address as _ptv_geocode_address
     _IMPORTS_OK = True
-except ImportError:
+except Exception as _e:
     _IMPORTS_OK = False
+    _IMPORT_ERR = f"{type(_e).__name__}: {_e}"
     PAYS_MAP = {
         "F": "France", "B": "Belgium", "D": "Germany", "L": "Luxembourg",
         "NL": "Netherlands", "E": "Spain", "I": "Italy", "CH": "Switzerland",
@@ -854,6 +861,8 @@ ui.page("missions_ca_km", "Consolide les missions et le chiffre d’affaires, et
 
 if not PTV_API_KEY or PTV_API_KEY == "METS_TA_CLE_ICI":
     st.error("Clé PTV_API_KEY non configurée. Le calcul de distances ne fonctionnera pas.")
+if not _IMPORTS_OK:
+    st.warning(f"Modules km_calcul non chargés, géocodage désactivé : {_IMPORT_ERR}")
 
 st.divider()
 
