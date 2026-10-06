@@ -47,7 +47,12 @@ def _load_ptv(project_root: str):
     return mod
 
 _HERE  = os.path.dirname(os.path.abspath(__file__))
-_ROOTS = [_HERE, os.path.dirname(_HERE)]
+_ROOTS = [
+    os.path.join(os.path.dirname(_HERE), "tools", "km_calcul", "modules"),  # emplacement réel
+    _HERE,
+    os.path.dirname(_HERE),
+]
+_PTV_ERR = ""
 PTV_AVAILABLE = False
 _ptv_mod = None
 for _root in _ROOTS:
@@ -57,8 +62,8 @@ for _root in _ROOTS:
             if _ptv_mod:
                 PTV_AVAILABLE = True
                 break
-        except Exception:
-            pass
+        except Exception as _e:
+            _PTV_ERR = f"{type(_e).__name__}: {_e}"
 
 if PTV_AVAILABLE and _ptv_mod:
     geocode_by_postal_code = _ptv_mod.geocode_by_postal_code
@@ -815,6 +820,8 @@ ui.page("aide_planning", "Vue planeur : chargements et déchargements par chauff
         "flotte CB et tractionnaires confondus.")
 st.markdown('<div class="ap-statut"><i></i>PTV routing actif</div>' if PTV_AVAILABLE else
             '<div class="ap-statut off"><i></i>PTV indisponible, géocodage OSM</div>', unsafe_allow_html=True)
+if _PTV_ERR:
+    st.caption(f"Chargement PTV : {_PTV_ERR}")
 st.write("")
 
 up = st.file_uploader("Fichier des activités (chargements / déchargements)", type=["xlsx", "xls"])
