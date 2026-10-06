@@ -150,7 +150,7 @@ section.main *:not([data-testid="stIconMaterial"]):not([class*="material-symbols
 [data-testid="stMain"] { -webkit-font-smoothing: antialiased; }
 [data-testid="stHeader"] { background: transparent !important; }
 .block-container, [data-testid="stMainBlockContainer"] {
-  max-width: 1100px !important; padding-top: 1.4rem !important; padding-bottom: 4rem !important;
+  max-width: 1100px !important; padding-top: 4.25rem !important; padding-bottom: 4rem !important;
 }
 [data-testid="stMain"] p, [data-testid="stMain"] label, [data-testid="stMain"] li,
 section.main p, section.main label { color: var(--ap-text); }
@@ -178,7 +178,8 @@ section.main p, section.main label { color: var(--ap-text); }
 .hub-brand span { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--ap-text); }
 .hub-brand em { font-style: normal; color: var(--ap-sub); font-weight: 400; }
 .st-key-hub_topbar [data-testid="stPageLink"] a {
-  background: transparent; border-radius: 980px; padding: 4px 12px 4px 8px; min-height: 0;
+  background: transparent; border-radius: 980px; padding: 8px 16px 8px 12px; min-height: 0;
+  position: relative; z-index: 1000; cursor: pointer;
 }
 .st-key-hub_topbar [data-testid="stPageLink"] a:hover { background: var(--ap-soft); }
 .st-key-hub_topbar [data-testid="stPageLink"] a p,
