@@ -80,6 +80,50 @@ def preparer(h_mis: str, h_ca: str, _mis: bytes, _ca: bytes, ecart_jours: float,
     return d, non_geo, precision, ca_seul
 
 
+BORDER_URLS = [
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_boundary_lines_land.geojson",
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson",
+]
+EUROPE_BBOX = (-11.0, 35.0, 32.0, 62.0)  # ouest, sud, est, nord
+
+
+def _decimer(ligne, pas=0.003):
+    if len(ligne) < 3:
+        return [[round(p[0], 4), round(p[1], 4)] for p in ligne]
+    out = [ligne[0]]
+    for p in ligne[1:-1]:
+        if abs(p[0] - out[-1][0]) + abs(p[1] - out[-1][1]) >= pas:
+            out.append(p)
+    out.append(ligne[-1])
+    return [[round(p[0], 4), round(p[1], 4)] for p in out]
+
+
+@st.cache_data(ttl=30 * 86400, show_spinner="Chargement des frontières…")
+def load_borders():
+    """Frontières Natural Earth limitées à l'Europe (même source que la carte des lavages)."""
+    import urllib.request as ureq
+    w, s_, e, n = EUROPE_BBOX
+    for url in BORDER_URLS:
+        try:
+            req = ureq.Request(url, headers={"User-Agent": "CB-Transport-Hub/1.0"})
+            with ureq.urlopen(req, timeout=40) as r:
+                data = json.loads(r.read())
+        except Exception:
+            continue
+        lignes = []
+        for f in data.get("features", []):
+            g = f.get("geometry") or {}
+            parts = [g["coordinates"]] if g.get("type") == "LineString" else (
+                g["coordinates"] if g.get("type") == "MultiLineString" else [])
+            for li in parts:
+                if any(w <= p[0] <= e and s_ <= p[1] <= n for p in li):
+                    lignes.append(_decimer(li))
+        if lignes:
+            return {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {},
+                    "geometry": {"type": "MultiLineString", "coordinates": lignes}}]}
+    raise RuntimeError("frontières indisponibles")
+
+
 def fr2(x) -> str:
     return f"{x:.2f}".replace(".", ",")
 
@@ -282,7 +326,12 @@ def payload_carte() -> dict:
 
 
 MAP_HTML = open(os.path.join(os.path.dirname(E.__file__), "carte.html"), encoding="utf-8").read()
-carte = MAP_HTML.replace("__DATA__", json.dumps(payload_carte(), ensure_ascii=False).replace("</", "<\\/"), 1)
+try:
+    frontieres = load_borders()
+except Exception:
+    frontieres = None
+carte = (MAP_HTML.replace("__DATA__", json.dumps(payload_carte(), ensure_ascii=False).replace("</", "<\\/"), 1)
+         .replace("__BORDERS__", json.dumps(frontieres, separators=(",", ":")) if frontieres else "null", 1))
 contenu = json.dumps(carte).replace("</", "<\\/")
 components.html(f"""
 <style>
