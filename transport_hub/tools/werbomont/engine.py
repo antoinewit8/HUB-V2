@@ -509,40 +509,68 @@ def cle_ptv() -> str:
     return "" if k in ("", "METS_TA_CLE_ICI") else k
 
 
-def ptv_km(a, b, cle: str, timeout: int = 20):
-    """km PTV entre deux points (lat, lon), ou None."""
+def ptv_km(a, b, cle: str, timeout: int = 25):
+    """km PTV entre deux points (lat, lon). Renvoie (km, None) ou (None, "message d'erreur")."""
     import requests
     import time
-    params = [("profile", PTV_PROFIL), ("waypoints", f"{a[0]},{a[1]}"), ("waypoints", f"{b[0]},{b[1]}")]
-    for essai in range(3):
+    params = [("profile", PTV_PROFIL),
+              ("waypoints", f"{float(a[0]):.6f},{float(a[1]):.6f}"),
+              ("waypoints", f"{float(b[0]):.6f},{float(b[1]):.6f}")]
+    err = "aucune réponse"
+    for essai in range(5):
         try:
             r = requests.get(PTV_URL, params=params, headers={"apiKey": cle}, timeout=timeout)
-            if r.status_code == 429:
-                time.sleep(1.5 * (essai + 1))
-                continue
-            if r.status_code != 200:
-                return None
-            return round(r.json().get("distance", 0) / 1000, 1)
+        except Exception as e:
+            err = f"réseau : {type(e).__name__}"
+            time.sleep(1 + essai)
+            continue
+        if r.status_code == 200:
+            km = round(r.json().get("distance", 0) / 1000, 1)
+            return (km, None) if km > 0 else (None, "distance nulle")
+        detail = ""
+        try:
+            j = r.json()
+            detail = j.get("description") or j.get("errorCode") or j.get("message") or ""
         except Exception:
-            time.sleep(1)
-    return None
+            detail = r.text[:120]
+        err = f"HTTP {r.status_code}" + (f" : {detail}" if detail else "")
+        if r.status_code in (429, 500, 502, 503, 504):        # quota / surcharge : on attend et on réessaie
+            try:
+                attente = float(r.headers.get("Retry-After", 0))
+            except ValueError:
+                attente = 0
+            time.sleep(max(attente, 2 * (essai + 1)))
+            continue
+        return None, err                                     # 400, 401, 403… : inutile de réessayer
+    return None, err
 
 
-def ptv_lot(paires, cle: str, cache: dict, workers: int = 8, progression=None):
-    """Calcule les paires absentes du cache (en parallèle). Renvoie (nb ok, nb échecs)."""
+def ptv_test(cle: str):
+    """Un appel de contrôle Liège → Werbomont. Renvoie (km, erreur)."""
+    return ptv_km((50.6326, 5.5797), WERBOMONT, cle)
+
+
+def ptv_lot(paires, cle: str, cache: dict, workers: int = 3, progression=None, arret_si_refus: bool = True):
+    """Calcule les paires absentes du cache. Renvoie (nb ok, {erreur: nb}).
+    S'arrête tôt si PTV refuse la clé (401/403) : inutile d'envoyer le reste du lot."""
+    from collections import Counter
     from concurrent.futures import ThreadPoolExecutor, as_completed
     a_faire = [(a, b) for a, b in paires if Distances.cle(a, b) not in cache]
-    ok = ko = 0
+    ok, erreurs = 0, Counter()
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futurs = {ex.submit(ptv_km, a, b, cle): (a, b) for a, b in a_faire}
         for n, f in enumerate(as_completed(futurs), 1):
             a, b = futurs[f]
-            km = f.result()
-            if km is not None and km > 0:
+            km, err = f.result()
+            if km is not None:
                 cache[Distances.cle(a, b)] = km
                 ok += 1
             else:
-                ko += 1
+                erreurs[err] += 1
+                if arret_si_refus and err.startswith(("HTTP 401", "HTTP 403")):
+                    for g in futurs:
+                        g.cancel()
+                    break
             if progression:
-                progression(n, len(a_faire))
-    return ok, ko
+                progression(n, len(a_faire), ok, sum(erreurs.values()))
+    return ok, dict(erreurs)
