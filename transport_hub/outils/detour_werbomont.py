@@ -220,21 +220,41 @@ st.markdown(
     unsafe_allow_html=True)
 st.caption(f"Candidats : dossiers dont le détour estimé est ≤ {seuils[1] + 40:.0f} km. "
            f"{len(paires):_} tronçons, dont {len(manquantes):_} à calculer.".replace("_", " "))
+if cle:
+    if st.button("Tester la connexion PTV"):
+        with st.spinner("Appel PTV Liège → Werbomont…"):
+            km_t, err_t = E.ptv_test(cle)
+        if km_t:
+            st.success(f"PTV répond : Liège → Werbomont = {fr2(km_t)} km.")
+        else:
+            st.error(f"PTV ne répond pas correctement : {err_t}")
+    if st.session_state.get("wb_ptv_bilan"):
+        ok_b, err_b = st.session_state["wb_ptv_bilan"]
+        if err_b:
+            detail = " · ".join(f"{k} ({v})" for k, v in sorted(err_b.items(), key=lambda x: -x[1]))
+            (st.warning if ok_b else st.error)(f"Dernier lot : {ok_b} tronçons calculés, {sum(err_b.values())} en échec. "
+                                               f"Erreurs PTV : {detail}")
+        else:
+            st.success(f"Dernier lot : {ok_b} tronçons calculés.")
 if cle and manquantes:
-    cA, cB = st.columns([1, 2])
+    cA, cB, cC = st.columns([1, 1, 2])
     with cA:
-        lot = st.number_input("Tronçons par lancement", min_value=50, max_value=5000,
-                              value=min(1500, len(manquantes)), step=50)
+        lot = st.number_input("Tronçons par lancement", min_value=10, max_value=5000,
+                              value=min(300, len(manquantes)), step=50)
     with cB:
+        paral = st.number_input("Appels simultanés", min_value=1, max_value=8, value=2,
+                                help="Baissez à 1 si PTV renvoie des erreurs 429 (trop de requêtes).")
+    with cC:
         st.write("")
         st.write("")
         go = st.button(f"Calculer {min(lot, len(manquantes)):_} tronçons avec PTV".replace("_", " "), type="primary")
     if go:
         barre = st.progress(0.0, text="PTV…")
-        ok, ko = E.ptv_lot(manquantes[: int(lot)], cle, dist.cache,
-                           progression=lambda n, t: barre.progress(n / t, text=f"PTV… {n}/{t}"))
+        ok, erreurs = E.ptv_lot(
+            manquantes[: int(lot)], cle, dist.cache, workers=int(paral),
+            progression=lambda n, t, o, e: barre.progress(n / t, text=f"PTV… {n}/{t} · {o} ok · {e} en échec"))
         barre.empty()
-        st.toast(f"{ok} tronçons calculés" + (f", {ko} en échec" if ko else ""))
+        st.session_state["wb_ptv_bilan"] = (ok, erreurs)
         st.rerun()
 
 # ─── Synthèse ────────────────────────────────────────────────────────────────
