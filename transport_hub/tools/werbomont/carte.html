@@ -84,33 +84,42 @@ const D = __DATA__;
 const C = { ok: '#248a3d', verif: '#e8890c', lourd: '#d70015', na: '#8e8e93' };
 const LBL = { ok: 'Acceptable', verif: 'À vérifier', lourd: 'Trop lourd', na: 'Non calculé' };
 const W = D.w, S = D.seuils;
-const state = { mode: D.mode, cats: { ok: true, verif: true, lourd: false, na: false }, q: '', tri: 'n', sel: null, fond: 'Plan' };
+const state = { mode: D.mode, cats: { ok: true, verif: true, lourd: false, na: false }, q: '', tri: 'n', sel: null, fond: 'Satellite' };
 const $ = id => document.getElementById(id);
 const esc = v => v == null ? '' : String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const nf = (v, d = 0) => v == null ? '—' : v.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
 const st = l => l[state.mode] || { cat: 'na' };
 
 function esri(s) { return `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`; }
+// Mêmes fonds que la carte des lavages (Esri : s'affichent depuis l'onglet ouvert par le HUB)
 const FONDS = {
-  'Plan': [['https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', '© OpenStreetMap © CARTO', 19]],
-  'Satellite': [[esri('World_Imagery'), 'Tiles © Esri', 18], [esri('Reference/World_Boundaries_and_Places'), '© Esri', 18]],
-  'Sombre': [['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', '© OpenStreetMap © CARTO', 19]],
+  'Satellite': { layers: [[esri('World_Imagery'), 'Tiles © Esri', 18], [esri('Reference/World_Boundaries_and_Places'), '© Esri', 18]],
+                 front: '#ffd54f', halo: '#000000' },
+  'Sombre': { layers: [[esri('Canvas/World_Dark_Gray_Base'), 'Tiles © Esri', 16], [esri('Canvas/World_Dark_Gray_Reference'), '© Esri', 16]],
+              front: '#ffd54f', halo: '#000000' },
 };
+const BORDERS = __BORDERS__;
 const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([49.6, 4.8], 6);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map);
-let tiles = [];
+let tiles = [], bHalo = null, bLine = null;
 function setFond(f) {
   state.fond = f; tiles.forEach(t => map.removeLayer(t));
-  tiles = FONDS[f].map(([u, a, z]) => L.tileLayer(u, { attribution: a, maxNativeZoom: z, maxZoom: 19, subdomains: 'abcd' }).addTo(map));
+  tiles = FONDS[f].layers.map(([u, a, z], i) => L.tileLayer(u, { attribution: a, maxNativeZoom: z, maxZoom: 19, zIndex: i }).addTo(map));
+  [bHalo, bLine].forEach(l => l && map.removeLayer(l)); bHalo = bLine = null;
+  if (BORDERS) {
+    bHalo = L.geoJSON(BORDERS, { interactive: false, style: { color: FONDS[f].halo, weight: 7, opacity: .75 } }).addTo(map);
+    bLine = L.geoJSON(BORDERS, { interactive: false, style: { color: FONDS[f].front, weight: 2.6, opacity: 1 } }).addTo(map);
+    bHalo.bringToBack(); bLine.bringToBack();
+  }
   document.querySelectorAll('#fonds button').forEach(b => b.classList.toggle('on', b.dataset.f === f));
 }
 $('fonds').innerHTML = Object.keys(FONDS).map(f => `<button data-f="${f}" style="padding:6px 12px">${f}</button>`).join('');
 $('fonds').onclick = e => { if (e.target.dataset.f) setFond(e.target.dataset.f); };
-setFond('Plan');
+setFond('Satellite');
 
 // Werbomont + cercles de repère (vol d'oiseau)
-[25, 50, 100].forEach(r => L.circle(W, { radius: r * 1000, color: '#003087', weight: 1, opacity: .5, fill: false, dashArray: '4 6', interactive: false }).addTo(map));
+[25, 50, 100].forEach(r => L.circle(W, { radius: r * 1000, color: '#ffffff', weight: 1.2, opacity: .7, fill: false, dashArray: '4 6', interactive: false }).addTo(map));
 L.marker(W, { icon: L.divIcon({ className: '', html: '<div class="wpin">W</div>', iconSize: [0, 0] }), zIndexOffset: 1000 })
   .bindTooltip('CB Groupe · 4190 Werbomont<br><span style="color:#6e6e73">Cercles : 25 · 50 · 100 km à vol d’oiseau</span>', { direction: 'top', offset: [0, -18] }).addTo(map);
 
