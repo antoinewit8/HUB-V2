@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Détour Werbomont</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Helvetica Neue", Arial, sans-serif;
+  --text: #1d1d1f; --sub: #6e6e73; --hair: #e5e5ea; --soft: #f2f2f7; --blue: #0071e3; --navy: #003087;
+  --ok: #248a3d; --verif: #e8890c; --lourd: #d70015; --na: #8e8e93;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; font-family: var(--font); color: var(--text); background: #e8e8ed; -webkit-font-smoothing: antialiased; }
+#map { position: absolute; inset: 0; }
+#panel { position: absolute; top: 12px; left: 12px; bottom: 12px; width: 380px; z-index: 1000; display: flex; flex-direction: column;
+  background: rgba(255,255,255,.86); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,.18), 0 0 0 .5px rgba(0,0,0,.08); overflow: hidden; }
+header { padding: 18px 18px 10px; }
+h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+.meta { font-size: 12px; color: var(--sub); margin-top: 3px; }
+.seg { display: flex; background: rgba(118,118,128,.12); border-radius: 9px; padding: 2px; margin-top: 12px; }
+.seg button { flex: 1; border: none; background: transparent; font: 500 13px var(--font); color: var(--text); padding: 6px 0; border-radius: 7px; cursor: pointer; }
+.seg button.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.04); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.chip { border: none; border-radius: 980px; padding: 5px 11px; font: 500 12px var(--font); cursor: pointer; background: var(--soft); color: var(--sub); }
+.chip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.chip.on { color: var(--text); background: #fff; box-shadow: 0 0 0 1px var(--hair); }
+.row { display: flex; gap: 8px; margin-top: 10px; }
+input, select { font: 14px var(--font); border: none; background: rgba(118,118,128,.12); border-radius: 10px; padding: 8px 10px; color: var(--text); outline: none; }
+input { flex: 1; min-width: 0; } select { width: 130px; }
+#list { flex: 1; overflow: auto; padding: 4px 10px 12px; border-top: .5px solid var(--hair); }
+.it { padding: 10px 10px; border-radius: 12px; cursor: pointer; display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: center; }
+.it:hover { background: rgba(0,0,0,.04); } .it.sel { background: rgba(0,113,227,.1); }
+.it .dot { width: 10px; height: 10px; border-radius: 50%; }
+.it .t { font-size: 14px; font-weight: 500; line-height: 1.3; }
+.it .s { font-size: 12px; color: var(--sub); margin-top: 1px; }
+.it .k { text-align: right; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.it .k small { display: block; font-size: 11px; font-weight: 400; color: var(--sub); }
+.empty { color: var(--sub); font-size: 14px; padding: 20px 10px; }
+#card { display: none; border-top: .5px solid var(--hair); padding: 14px 18px 16px; background: rgba(255,255,255,.7); }
+#card h2 { font-size: 17px; font-weight: 600; margin: 0 0 2px; letter-spacing: -0.01em; }
+#card .cli { font-size: 12px; color: var(--sub); margin-bottom: 10px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.cell { background: #fff; border-radius: 12px; padding: 8px 10px; box-shadow: 0 0 0 .5px rgba(0,0,0,.06); }
+.cell .v { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; } .cell .l { font-size: 11px; color: var(--sub); }
+.cmp { margin-top: 10px; font-size: 13px; line-height: 1.5; }
+.cmp b { font-weight: 600; }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 980px; color: #fff; vertical-align: 1px; margin-left: 6px; }
+.x { float: right; border: none; background: var(--soft); border-radius: 50%; width: 24px; height: 24px; cursor: pointer; color: var(--sub); font-size: 14px; line-height: 24px; padding: 0; }
+#fonds { position: absolute; top: 12px; right: 12px; z-index: 1000; }
+#leg { position: absolute; bottom: 24px; right: 60px; z-index: 1000; background: rgba(255,255,255,.86); backdrop-filter: blur(20px);
+  border-radius: 12px; padding: 8px 12px; font-size: 12px; color: var(--sub); box-shadow: 0 4px 18px rgba(0,0,0,.14); line-height: 1.7; }
+#leg i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; }
+.leaflet-bar { border: none !important; border-radius: 12px !important; overflow: hidden; box-shadow: 0 4px 18px rgba(0,0,0,.18) !important; }
+.leaflet-bar a { background: rgba(255,255,255,.9) !important; color: var(--text) !important; width: 36px !important; height: 36px !important; line-height: 36px !important; }
+.leaflet-tooltip { border-radius: 8px; border: none; box-shadow: 0 4px 14px rgba(0,0,0,.18); font: 500 12px var(--font); }
+.wpin { width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; background: var(--navy); color: #fff; font: 700 15px var(--font);
+  display: flex; align-items: center; justify-content: center; border: 3px solid #fff; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+.pt { width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+@media (max-width: 700px) { #panel { width: auto; right: 12px; top: auto; height: 55%; } #leg { display: none; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <header>
+    <h1>Détour Werbomont</h1>
+    <div class="meta" id="meta"></div>
+    <div class="seg" id="seg"><button data-m="vide">À vide · lavage, plein</button><button data-m="charge">En charge · parking, relais</button></div>
+    <div class="chips" id="chips"></div>
+    <div class="row"><input id="q" placeholder="Ville, client…"><select id="tri">
+      <option value="n">Dossiers</option><option value="det">Détour</option><option value="ca">CA</option><option value="dp">Écart renta</option></select></div>
+  </header>
+  <div id="list"></div>
+  <div id="card"></div>
+</div>
+<div id="fonds" class="seg" style="margin:0;background:rgba(255,255,255,.86);backdrop-filter:blur(20px);box-shadow:0 4px 18px rgba(0,0,0,.14)"></div>
+<div id="leg"></div>
+<script>
+const D = __DATA__;
+const C = { ok: '#248a3d', verif: '#e8890c', lourd: '#d70015', na: '#8e8e93' };
+const LBL = { ok: 'Acceptable', verif: 'À vérifier', lourd: 'Trop lourd', na: 'Non calculé' };
+const W = D.w, S = D.seuils;
+const state = { mode: D.mode, cats: { ok: true, verif: true, lourd: false, na: false }, q: '', tri: 'n', sel: null, fond: 'Plan' };
+const $ = id => document.getElementById(id);
+const esc = v => v == null ? '' : String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const nf = (v, d = 0) => v == null ? '—' : v.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
+const st = l => l[state.mode] || { cat: 'na' };
+
+function esri(s) { return `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`; }
+const FONDS = {
+  'Plan': [['https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', '© OpenStreetMap © CARTO', 19]],
+  'Satellite': [[esri('World_Imagery'), 'Tiles © Esri', 18], [esri('Reference/World_Boundaries_and_Places'), '© Esri', 18]],
+  'Sombre': [['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', '© OpenStreetMap © CARTO', 19]],
+};
+const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([49.6, 4.8], 6);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map);
+let tiles = [];
+function setFond(f) {
+  state.fond = f; tiles.forEach(t => map.removeLayer(t));
+  tiles = FONDS[f].map(([u, a, z]) => L.tileLayer(u, { attribution: a, maxNativeZoom: z, maxZoom: 19, subdomains: 'abcd' }).addTo(map));
+  document.querySelectorAll('#fonds button').forEach(b => b.classList.toggle('on', b.dataset.f === f));
+}
+$('fonds').innerHTML = Object.keys(FONDS).map(f => `<button data-f="${f}" style="padding:6px 12px">${f}</button>`).join('');
+$('fonds').onclick = e => { if (e.target.dataset.f) setFond(e.target.dataset.f); };
+setFond('Plan');
+
+// Werbomont + cercles de repère (vol d'oiseau)
+[25, 50, 100].forEach(r => L.circle(W, { radius: r * 1000, color: '#003087', weight: 1, opacity: .5, fill: false, dashArray: '4 6', interactive: false }).addTo(map));
+L.marker(W, { icon: L.divIcon({ className: '', html: '<div class="wpin">W</div>', iconSize: [0, 0] }), zIndexOffset: 1000 })
+  .bindTooltip('CB Groupe · 4190 Werbomont<br><span style="color:#6e6e73">Cercles : 25 · 50 · 100 km à vol d’oiseau</span>', { direction: 'top', offset: [0, -18] }).addTo(map);
+
+const lyr = L.layerGroup().addTo(map), sel = L.layerGroup().addTo(map);
+D.lignes.forEach((l, i) => l.i = i);
+
+function visibles() {
+  const q = state.q.trim().toUpperCase();
+  let a = D.lignes.filter(l => state.cats[st(l).cat] && (!q || (l.l + ' ' + (l.cli || '')).toUpperCase().includes(q)));
+  const k = { n: l => -l.n, ca: l => -(l.ca || 0), det: l => st(l).det ?? 1e9, dp: l => -(st(l).dp ?? -1e9) }[state.tri];
+  return a.sort((x, y) => k(x) - k(y));
+}
+function poids(n) { return 1.5 + Math.log2(1 + n) * .9; }
+
+function dessiner() {
+  lyr.clearLayers();
+  const v = visibles();
+  v.slice().reverse().forEach(l => {
+    const s = st(l), c = C[s.cat];
+    L.polyline([l.a, l.b], { color: c, weight: poids(l.n), opacity: state.sel == null || state.sel === l.i ? .75 : .18 })
+      .bindTooltip(`<b>${esc(l.l)}</b><br>${l.n} dossiers · détour médian ${nf(s.det)} km`, { sticky: true })
+      .on('click', () => choisir(l.i, false)).addTo(lyr);
+  });
+  // compteurs
+  const cnt = { ok: 0, verif: 0, lourd: 0, na: 0 };
+  D.lignes.forEach(l => cnt[st(l).cat]++);
+  $('chips').innerHTML = ['ok', 'verif', 'lourd', 'na'].map(k =>
+    `<button class="chip ${state.cats[k] ? 'on' : ''}" data-k="${k}"><i style="background:${C[k]}"></i>${LBL[k]} ${cnt[k]}</button>`).join('');
+  $('list').innerHTML = v.length ? v.slice(0, 400).map(l => {
+    const s = st(l);
+    return `<div class="it ${state.sel === l.i ? 'sel' : ''}" data-i="${l.i}"><span class="dot" style="background:${C[s.cat]}"></span>
+      <div><div class="t">${esc(l.l)}</div><div class="s">${l.n} dossiers · ${nf(l.prix)} € moy.${s.dejaW ? ` · ${s.dejaW} déjà via W` : ''}</div></div>
+      <div class="k">${nf(s.det)} km<small>${s.dp == null ? '' : nf(s.dp, 1) + ' %'}</small></div></div>`;
+  }).join('') + (v.length > 400 ? `<div class="empty">${v.length - 400} lignes de plus : affinez la recherche.</div>` : '')
+    : '<div class="empty">Aucune ligne pour ces filtres.</div>';
+  document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.m === state.mode));
+  $('leg').innerHTML = `<i style="background:${C.ok}"></i>≤ ${S[0]} km<br><i style="background:${C.verif}"></i>${S[0]}–${S[1]} km<br><i style="background:${C.lourd}"></i>&gt; ${S[1]} km<br>`
+    + `<span style="font-size:11px">détour médian ${state.mode === 'vide' ? 'à vide' : 'en charge'}</span>`;
+}
+
+function choisir(i, zoom = true) {
+  state.sel = state.sel === i ? null : i;
+  sel.clearLayers();
+  if (state.sel == null) { $('card').style.display = 'none'; dessiner(); return; }
+  const l = D.lignes[i], s = st(l), c = C[s.cat];
+  L.polyline([l.a, l.b], { color: c, weight: poids(l.n) + 2, opacity: 1 }).addTo(sel);
+  const det = state.mode === 'vide' ? [l.b, W] : [l.a, W, l.b];
+  L.polyline(det, { color: '#003087', weight: 3, dashArray: '6 8', opacity: .9 }).addTo(sel);
+  [[l.a, '#ffffff'], [l.b, c]].forEach(([p, bg]) => L.marker(p, { icon: L.divIcon({ className: '', html: `<div class="pt" style="background:${bg};border-color:${c}"></div>`, iconSize: [0, 0] }) }).addTo(sel));
+  if (zoom) map.fitBounds(L.latLngBounds([l.a, l.b, W]), { paddingTopLeft: [420, 40], paddingBottomRight: [40, 40], maxZoom: 9 });
+  const o = state.mode === 'vide' ? l.charge : l.vide;
+  $('card').style.display = 'block';
+  $('card').innerHTML = `<button class="x" onclick="choisir(${i})">×</button>
+    <h2>${esc(l.l)}<span class="badge" style="background:${c}">${LBL[s.cat]}</span></h2>
+    <div class="cli">${esc(l.cli || '')}</div>
+    <div class="grid">
+      <div class="cell"><div class="v">${l.n}</div><div class="l">dossiers (${l.nc} calculés)</div></div>
+      <div class="cell"><div class="v">${nf(l.prix)} €</div><div class="l">prix moyen</div></div>
+      <div class="cell"><div class="v">${nf(l.kmc)}</div><div class="l">km chargés moy.</div></div>
+      <div class="cell"><div class="v">${nf(s.det)} km</div><div class="l">détour médian</div></div>
+      <div class="cell"><div class="v">${s.ok == null ? '—' : nf(s.ok * 100) + ' %'}</div><div class="l">dossiers ≤ ${S[0]} km</div></div>
+      <div class="cell"><div class="v">${nf(l.kmv)}</div><div class="l">km vide moy.</div></div>
+    </div>
+    <div class="cmp">Renta <b>${nf(s.ra, 2)} €/km</b> → <b>${nf(s.rw, 2)} €/km</b> via Werbomont (${s.dp == null ? '—' : nf(s.dp, 1) + ' %'}).<br>
+    ${o ? `${state.mode === 'vide' ? 'En charge' : 'À vide'} : détour médian ${nf(o.det)} km, ${LBL[o.cat].toLowerCase()}.` : ''}
+    ${l.multi ? `<br>${l.multi} dossiers multi-points.` : ''}${s.dejaW ? `<br>${s.dejaW} dossiers passent déjà par Werbomont ${state.mode === 'vide' ? 'après déchargement' : 'en charge'}.` : ''}</div>`;
+  dessiner();
+  const el = document.querySelector(`.it[data-i="${i}"]`); if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+$('meta').textContent = `${D.periode} · ${D.lignes.length} lignes · seuils ${S[0]} / ${S[1]} km · généré le ${D.genere}`;
+$('seg').onclick = e => { if (e.target.dataset.m) { state.mode = e.target.dataset.m; if (state.sel != null) { const i = state.sel; state.sel = null; choisir(i, false); } else dessiner(); } };
+$('chips').onclick = e => { const b = e.target.closest('.chip'); if (b) { state.cats[b.dataset.k] = !state.cats[b.dataset.k]; dessiner(); } };
+$('list').onclick = e => { const it = e.target.closest('.it'); if (it) choisir(+it.dataset.i); };
+$('q').oninput = e => { state.q = e.target.value; dessiner(); };
+$('tri').onchange = e => { state.tri = e.target.value; dessiner(); };
+dessiner();
+</script>
+</body>
+</html>
