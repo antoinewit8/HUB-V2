@@ -247,7 +247,19 @@
         #traffic-pop .bx-title { font-size: 12.5px; margin-bottom: 4px; }
         #traffic-pop .al-row { padding: 6px 8px; }
         #traffic-pop .al-ok { font-size: 12.5px; color: var(--sub); padding: 0 0 4px; }
-        .rows > #traffic-pop + .row { border-top: .5px solid var(--hair); }
+        /* Dossier « Options » repliable */
+        .opts { margin-top: 10px; border-radius: 12px; background: #fff; box-shadow: var(--tile); padding: 0 12px; }
+        .opts summary { display: flex; align-items: center; gap: 8px; padding: 10px 0; font-size: 15px; cursor: pointer;
+            list-style: none; user-select: none; }
+        .opts summary::-webkit-details-marker { display: none; }
+        .opts-sum { flex: 1; min-width: 0; text-align: right; font-size: 12.5px; color: var(--sub);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .opts-sum.on { color: var(--blue); font-weight: 500; }
+        .opts-caret { flex: none; font-size: 8px; color: #86868b; transition: transform .2s var(--ease); }
+        .opts[open] .opts-caret { transform: rotate(90deg); color: var(--blue); }
+        .opts .rows { margin-top: 0; border-top: .5px solid var(--hair); }
+        .opts .row { font-size: 14px; padding: 8px 0; }
+        #traffic-pop { margin-top: 8px; }
         @keyframes popIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
         #co2-line { display: none; margin-top: 8px; padding: 10px 12px; background: #fff; border-radius: 14px;
             box-shadow: var(--tile); font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -554,6 +566,8 @@
                 </select>
             </div>
 
+            <details id="opts" class="opts">
+                <summary><span>Options</span><span id="opts-sum" class="opts-sum">Aucune</span><span class="opts-caret">▶</span></summary>
             <div class="rows">
                 <label class="row">Éviter les péages
                     <span class="sw"><input type="checkbox" id="opt-tolls" onchange="onOptionChange()"><span></span></span>
@@ -564,7 +578,6 @@
                 <label class="row" title="Désactivé : ignore les fermetures et bouchons en temps réel, seules les restrictions permanentes et le profil camion comptent">Trafic en temps réel
                     <span class="sw"><input type="checkbox" id="opt-traffic" onchange="onOptionChange()"><span></span></span>
                 </label>
-                <div id="traffic-pop"></div>
                 <label class="row" title="Jusqu'à 3 variantes PTV, uniquement pour un trajet départ → arrivée sans étape">Itinéraires alternatifs
                     <span class="sw"><input type="checkbox" id="opt-alt" onchange="onOptionChange()"><span></span></span>
                 </label>
@@ -572,6 +585,8 @@
                     <span class="sw"><input type="checkbox" id="opt-co2" onchange="onOptionChange()"><span></span></span>
                 </label>
             </div>
+            </details>
+            <div id="traffic-pop"></div>
 
             <button class="btn btn-primary" id="btn-calc" onclick="calculateRoute()" disabled>Calculer l'itinéraire</button>
 
@@ -986,7 +1001,25 @@
                 box.classList.contains('collapsed') ? '▶' : '◀';
         }
 
-        function onOptionChange() { if (hasRoute) autoCalculate(); }
+        function onOptionChange() { updateOptsSummary(); if (hasRoute) autoCalculate(); }
+
+        // Résumé des options actives sur la ligne du dossier replié
+        const OPT_LABELS = [['opt-tolls', 'Sans péage'], ['opt-hw', 'Sans autoroute'], ['opt-traffic', 'Trafic'],
+                            ['opt-alt', 'Variantes'], ['opt-co2', 'CO₂']];
+        function updateOptsSummary() {
+            const on = OPT_LABELS.filter(([id]) => document.getElementById(id).checked).map(([, l]) => l);
+            const el = document.getElementById('opts-sum');
+            el.textContent = on.length ? on.join(' · ') : 'Aucune';
+            el.classList.toggle('on', on.length > 0);
+        }
+        (function initOpts() {
+            const d = document.getElementById('opts');
+            try { if (localStorage.getItem('cm_opts_open') === '1') d.open = true; } catch (e) {}
+            d.addEventListener('toggle', () => {
+                try { localStorage.setItem('cm_opts_open', d.open ? '1' : '0'); } catch (e) {}
+            });
+            updateOptsSummary();
+        })();
 
         // ═══════════════════════════════════════════════════════
         //  SAISIE DÉPART / ARRIVÉE AVEC SUGGESTIONS
