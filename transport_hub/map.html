@@ -237,9 +237,23 @@
         .fy-status.err { color: var(--red); }
 
         /* ── Variantes & alertes sur le trajet ── */
-        #alt-box, #alert-box { display: none; margin-top: 10px; padding: 13px 14px 10px; background: #fff;
+        #alt-box { display: none; margin-top: 10px; padding: 13px 14px 10px; background: #fff;
             border-radius: 14px; box-shadow: var(--tile); }
-        #alt-box.show, #alert-box.show { display: block; }
+        #alt-box.show { display: block; }
+        /* Pop trafic : juste sous l'interrupteur « Trafic en temps réel » */
+        #traffic-pop { display: none; margin: 0 0 10px; padding: 10px 12px 6px; background: #fff; border-radius: 12px;
+            box-shadow: var(--tile); max-height: 240px; overflow-y: auto; animation: popIn .22s var(--ease); }
+        #traffic-pop.show { display: block; }
+        #traffic-pop .bx-title { font-size: 12.5px; margin-bottom: 4px; }
+        #traffic-pop .al-row { padding: 6px 8px; }
+        #traffic-pop .al-ok { font-size: 12.5px; color: var(--sub); padding: 0 0 4px; }
+        .rows > #traffic-pop + .row { border-top: .5px solid var(--hair); }
+        @keyframes popIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+        #co2-line { display: none; margin-top: 8px; padding: 10px 12px; background: #fff; border-radius: 14px;
+            box-shadow: var(--tile); font-size: 13px; font-variant-numeric: tabular-nums; }
+        #co2-line.show { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+        #co2-line b { font-size: 16px; font-weight: 600; color: #1a7f37; }
+        #co2-line small { color: var(--sub); font-size: 11.5px; text-align: right; }
         .bx-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
         .alt-row, .al-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; margin: 0 -8px;
             border: none; border-radius: 10px; background: none; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
@@ -550,8 +564,12 @@
                 <label class="row" title="Désactivé : ignore les fermetures et bouchons en temps réel, seules les restrictions permanentes et le profil camion comptent">Trafic en temps réel
                     <span class="sw"><input type="checkbox" id="opt-traffic" onchange="onOptionChange()"><span></span></span>
                 </label>
+                <div id="traffic-pop"></div>
                 <label class="row" title="Jusqu'à 3 variantes PTV, uniquement pour un trajet départ → arrivée sans étape">Itinéraires alternatifs
-                    <span class="sw"><input type="checkbox" id="opt-alt" checked onchange="onOptionChange()"><span></span></span>
+                    <span class="sw"><input type="checkbox" id="opt-alt" onchange="onOptionChange()"><span></span></span>
+                </label>
+                <label class="row" title="Émissions CO2e du trajet (ISO 14083) pour un camion Euro 6">CO₂ (Euro 6)
+                    <span class="sw"><input type="checkbox" id="opt-co2" onchange="onOptionChange()"><span></span></span>
                 </label>
             </div>
 
@@ -575,9 +593,9 @@
                 </div>
                 <div id="km-detail"></div>
                 <div id="toll-detail"></div>
+                <div id="co2-line"></div>
 
                 <div id="alt-box"></div>
-                <div id="alert-box"></div>
 
                 <div id="ferry-box"></div>
 
@@ -1198,6 +1216,7 @@
                 avoid_highways: document.getElementById('opt-hw').checked,
                 traffic:        document.getElementById('opt-traffic').checked,
                 alternatives:   document.getElementById('opt-alt').checked,
+                co2:            document.getElementById('opt-co2').checked,
                 ferries:        forcedFerries.slice()
             };
         }
@@ -1385,6 +1404,25 @@
             renderFerries();
             renderAlternatives(d);
             renderAlerts(d);
+            renderCO2(d);
+        }
+
+        // CO2e (ISO 14083, Euro 6) — seulement si l'option est cochée
+        function renderCO2(d) {
+            const el = document.getElementById('co2-line');
+            const on = document.getElementById('opt-co2').checked;
+            const c = d && d.co2;
+            if (!on) { el.className = ''; el.innerHTML = ''; return; }
+            const f = v => Number(v).toLocaleString('fr-BE', { maximumFractionDigits: 1 });
+            if (c && (c.wtw_kg != null || c.ttw_kg != null)) {
+                const main = c.wtw_kg != null ? c.wtw_kg : c.ttw_kg;
+                const perKm = d.distance_km ? ` · ${f(main / d.distance_km * 1000)} g/km` : '';
+                el.innerHTML = `<span>CO₂e <b>${f(main)} kg</b></span>`
+                    + `<small>${c.wtw_kg != null ? 'puits à la roue' : 'réservoir à la roue'}${perKm}<br>ISO 14083 · Euro 6</small>`;
+            } else {
+                el.innerHTML = '<small style="text-align:left">CO₂ indisponible pour ce calcul.</small>';
+            }
+            el.className = 'show';
         }
 
         // ═══════════════════════════════════════════════════════
@@ -1451,6 +1489,7 @@
         function renderAlternatives(d) {
             _clearAlternatives();
             const alts = (d && Array.isArray(d.alternatives)) ? d.alternatives : [];
+            if (!document.getElementById('opt-alt').checked) return;
             if (!alts.length || waypoints.length || !geojsonCoords.length) return;
 
             altRoutes = alts.map(a => {
@@ -1509,14 +1548,23 @@
         function _clearAlerts() {
             alertMarkers.forEach(m => m.remove());
             alertMarkers = [];
-            const box = document.getElementById('alert-box');
+            const box = document.getElementById('traffic-pop');
             box.innerHTML = ''; box.classList.remove('show');
         }
         function renderAlerts(d) {
             _clearAlerts();
-            const list = (d && Array.isArray(d.alerts)) ? d.alerts : [];
-            const violated = !!(d && d.violated);
-            if (!list.length && !violated) return;
+            // Pop affichée seulement avec « Trafic en temps réel » coché :
+            // sans trafic, le serveur ne demande pas ces événements (mode rapide).
+            if (!document.getElementById('opt-traffic').checked || !d) return;
+            const list = Array.isArray(d.alerts) ? d.alerts : [];
+            const violated = !!d.violated;
+            const box = document.getElementById('traffic-pop');
+            if (!list.length && !violated) {
+                box.innerHTML = '<div class="bx-title">Sur le trajet</div>'
+                    + '<div class="al-ok">Aucun événement trafic ni restriction.</div>';
+                box.classList.add('show');
+                return;
+            }
 
             list.forEach(a => {
                 const el = document.createElement('div');
@@ -1535,7 +1583,6 @@
             const nV = list.length - nT;
             const resume = [nT ? `${nT} trafic` : '', nV ? `${nV} restriction${nV > 1 ? 's' : ''}` : '']
                 .filter(Boolean).join(' · ');
-            const box = document.getElementById('alert-box');
             box.innerHTML = `<div class="bx-title">Sur le trajet${resume ? ' · ' + resume : ''}</div>`
                 + (violated ? '<div class="al-warn">Ce tracé enfreint une restriction pour un 40 t : PTV n\'a pas trouvé mieux avec les étapes données.</div>' : '')
                 + list.map((a, i) => `
