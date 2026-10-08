@@ -509,6 +509,9 @@
                 <label class="row">Éviter les autoroutes
                     <span class="sw"><input type="checkbox" id="opt-hw" onchange="onOptionChange()"><span></span></span>
                 </label>
+                <label class="row" title="Désactivé : ignore les fermetures et bouchons en temps réel, seules les restrictions permanentes et le profil camion comptent">Trafic en temps réel
+                    <span class="sw"><input type="checkbox" id="opt-traffic" checked onchange="onOptionChange()"><span></span></span>
+                </label>
             </div>
 
             <button class="btn btn-primary" id="btn-calc" onclick="calculateRoute()" disabled>Calculer l'itinéraire</button>
@@ -1129,6 +1132,7 @@
             return {
                 avoid_tolls:    document.getElementById('opt-tolls').checked,
                 avoid_highways: document.getElementById('opt-hw').checked,
+                traffic:        document.getElementById('opt-traffic').checked,
                 ferries:        forcedFerries.slice()
             };
         }
