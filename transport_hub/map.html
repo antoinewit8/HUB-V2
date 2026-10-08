@@ -236,6 +236,37 @@
         .fy-status { font-size: 12px; color: var(--sub); margin-top: 6px; line-height: 1.4; }
         .fy-status.err { color: var(--red); }
 
+        /* ── Variantes & alertes sur le trajet ── */
+        #alt-box, #alert-box { display: none; margin-top: 10px; padding: 13px 14px 10px; background: #fff;
+            border-radius: 14px; box-shadow: var(--tile); }
+        #alt-box.show, #alert-box.show { display: block; }
+        .bx-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+        .alt-row, .al-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; margin: 0 -8px;
+            border: none; border-radius: 10px; background: none; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
+        .alt-row:hover, .al-row:hover, .alt-row.hl { background: var(--soft); }
+        .alt-tag { flex: none; width: 20px; height: 20px; border-radius: 50%; background: #8e9aa8; color: #fff;
+            font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+        .alt-main { flex: 1; min-width: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+        .alt-diff { flex: none; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .alt-diff.plus { color: var(--orange); } .alt-diff.minus { color: #1a7f37; }
+        .bx-hint { font-size: 11.5px; color: var(--sub); line-height: 1.4; margin: 6px 0 2px; }
+        .al-ico { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+            font-size: 11px; font-weight: 700; color: #fff; }
+        .al-ico.traffic, .al-pin.traffic { background: #f29900; }
+        .al-ico.violation, .al-pin.violation { background: var(--red); }
+        .al-txt { flex: 1; min-width: 0; font-size: 13px; line-height: 1.35; }
+        .al-txt small { display: block; color: var(--sub); font-size: 11.5px; }
+        .al-km { flex: none; font-size: 11.5px; color: var(--sub); font-variant-numeric: tabular-nums; }
+        .al-warn { font-size: 12px; color: var(--red); background: #fdecec; border-radius: 9px; padding: 7px 9px;
+            margin-bottom: 8px; line-height: 1.4; }
+        .al-pin { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #fff; color: #fff; font: 700 11px/16px var(--font);
+            text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; }
+        .alt-chip { padding: 3px 8px; border-radius: 980px; background: rgba(255,255,255,.95); color: var(--text);
+            font: 600 11.5px/1.3 var(--font); white-space: nowrap; box-shadow: 0 1px 5px rgba(0,0,0,.25); cursor: pointer;
+            font-variant-numeric: tabular-nums; }
+        .alt-chip b { color: #6b7785; margin-right: 4px; }
+        .alt-chip:hover, .alt-chip.hl { background: #fff; box-shadow: 0 0 0 2px #8e9aa8, 0 2px 8px rgba(0,0,0,.25); }
+
         /* ── Étapes ── */
         #wp-container { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--hair); }
         #wp-list { margin-bottom: 4px; }
@@ -519,6 +550,9 @@
                 <label class="row" title="Désactivé : ignore les fermetures et bouchons en temps réel, seules les restrictions permanentes et le profil camion comptent">Trafic en temps réel
                     <span class="sw"><input type="checkbox" id="opt-traffic" onchange="onOptionChange()"><span></span></span>
                 </label>
+                <label class="row" title="Jusqu'à 3 variantes PTV, uniquement pour un trajet départ → arrivée sans étape">Itinéraires alternatifs
+                    <span class="sw"><input type="checkbox" id="opt-alt" checked onchange="onOptionChange()"><span></span></span>
+                </label>
             </div>
 
             <button class="btn btn-primary" id="btn-calc" onclick="calculateRoute()" disabled>Calculer l'itinéraire</button>
@@ -541,6 +575,9 @@
                 </div>
                 <div id="km-detail"></div>
                 <div id="toll-detail"></div>
+
+                <div id="alt-box"></div>
+                <div id="alert-box"></div>
 
                 <div id="ferry-box"></div>
 
@@ -721,6 +758,21 @@
                 paint: { 'line-color': '#007cbf', 'line-width': 6, 'line-opacity': 0.85 }
             });
 
+            // Variantes PTV, sous le tracé principal
+            map.addSource('altSource', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+            map.addLayer({
+                id: 'altLayer', type: 'line', source: 'altSource',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#8e9aa8',
+                    'line-width': ['case', ['boolean', ['feature-state', 'hl'], false], 7, 5],
+                    'line-opacity': ['case', ['boolean', ['feature-state', 'hl'], false], 0.9, 0.6]
+                }
+            }, 'routeLayer');
+            map.on('mousemove', 'altLayer', e => { map.getCanvas().style.cursor = 'pointer'; _hlAlt(e.features[0].id - 1); });
+            map.on('mouseleave', 'altLayer', () => { map.getCanvas().style.cursor = ''; _hlAlt(null); });
+            map.on('click', 'altLayer', e => chooseAlternative(e.features[0].id - 1));
+
             // Ports d'embarquement / débarquement des traversées
             map.addSource('ferrySource', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
             map.addLayer({
@@ -849,6 +901,8 @@
         }
 
         function onMapClick(e) {
+            // Clic sur une variante : géré par la couche altLayer
+            if (map.getLayer('altLayer') && map.queryRenderedFeatures(e.point, { layers: ['altLayer'] }).length) return;
             // Le clic ne sert qu'à compléter ce qui manque, jamais à écraser un point posé.
             if (!origin)      setPoint('origin', e.lngLat);
             else if (!dest)   setPoint('dest',   e.lngLat);
@@ -868,6 +922,8 @@
                 map.setPaintProperty('originalRouteLayer', 'line-opacity', 0);
             }
             _resetFerries();
+            _clearAlternatives();
+            _clearAlerts();
             _cancelSearchPin();
             closeSuggest();
             document.getElementById('search-input').value = '';
@@ -1141,6 +1197,7 @@
                 avoid_tolls:    document.getElementById('opt-tolls').checked,
                 avoid_highways: document.getElementById('opt-hw').checked,
                 traffic:        document.getElementById('opt-traffic').checked,
+                alternatives:   document.getElementById('opt-alt').checked,
                 ferries:        forcedFerries.slice()
             };
         }
@@ -1326,6 +1383,174 @@
             renderTollDetail();
             renderKmDetail();
             renderFerries();
+            renderAlternatives(d);
+            renderAlerts(d);
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  VARIANTES PTV
+        // ═══════════════════════════════════════════════════════
+        // PTV renvoie jusqu'à 3 variantes pour un trajet départ → arrivée sans
+        // étape. Choisir une variante pose une étape à l'endroit où elle s'écarte
+        // le plus du tracé : le recalcul passe par là et redonne tous les
+        // chiffres (péages, km par pays) de cette variante.
+
+        let altRoutes = [], altChips = [], altHl = null;
+        const ALT_LETTERS = 'ABC';
+
+        // Distance approximative (km) entre deux [lng, lat]
+        function _dLL(a, b) {
+            const x = (b[0] - a[0]) * Math.cos((a[1] + b[1]) * Math.PI / 360);
+            return Math.hypot(x, b[1] - a[1]) * 111.32;
+        }
+        function _sample(coords, n) {
+            if (coords.length <= n) return coords;
+            const step = coords.length / n, out = [];
+            for (let i = 0; i < n; i++) out.push(coords[Math.floor(i * step)]);
+            out.push(coords[coords.length - 1]);
+            return out;
+        }
+        // Point de la variante le plus éloigné du tracé principal
+        function _pivot(alt, main) {
+            const m = _sample(main, 500);
+            let best = alt[Math.floor(alt.length / 2)], bestD = -1;
+            for (const p of _sample(alt, 300)) {
+                let dmin = Infinity;
+                for (const q of m) { const d = _dLL(p, q); if (d < dmin) dmin = d; }
+                if (dmin > bestD) { bestD = dmin; best = p; }
+            }
+            return best;
+        }
+        function _fmtH(h) {
+            const m = Math.round((h || 0) * 60);
+            return Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0');
+        }
+        function _fmtDiff(km, h) {
+            const dk = Math.round(km), dm = Math.round(h * 60);
+            const sk = (dk > 0 ? '+' : dk < 0 ? '−' : '±') + Math.abs(dk) + ' km';
+            const sm = dm ? ' · ' + (dm > 0 ? '+' : '−') + Math.abs(dm) + ' min' : '';
+            return { txt: sk + sm, cls: dk > 0 ? 'plus' : dk < 0 ? 'minus' : '' };
+        }
+        function _clearAlternatives() {
+            altChips.forEach(m => m.remove());
+            altChips = []; altRoutes = []; altHl = null;
+            const src = map.getSource && map.getSource('altSource');
+            if (src) src.setData({ type: 'FeatureCollection', features: [] });
+            const box = document.getElementById('alt-box');
+            box.innerHTML = ''; box.classList.remove('show');
+        }
+        function _hlAlt(i) {
+            if (altHl === i) return;
+            if (altHl !== null && map.getSource('altSource'))
+                map.setFeatureState({ source: 'altSource', id: altHl + 1 }, { hl: false });
+            altHl = i;
+            if (i !== null) map.setFeatureState({ source: 'altSource', id: i + 1 }, { hl: true });
+            altChips.forEach((m, k) => m.getElement().classList.toggle('hl', k === i));
+            document.querySelectorAll('.alt-row').forEach((r, k) => r.classList.toggle('hl', k === i));
+        }
+        function renderAlternatives(d) {
+            _clearAlternatives();
+            const alts = (d && Array.isArray(d.alternatives)) ? d.alternatives : [];
+            if (!alts.length || waypoints.length || !geojsonCoords.length) return;
+
+            altRoutes = alts.map(a => {
+                const coords = a.polyline.map(c => [c[1], c[0]]);
+                return { ...a, coords, pivot: _pivot(coords, geojsonCoords),
+                         diff: _fmtDiff(a.distance_km - d.distance_km, a.duration_h - d.duration_h) };
+            });
+
+            map.getSource('altSource').setData({
+                type: 'FeatureCollection',
+                features: altRoutes.map((a, i) => ({
+                    type: 'Feature', id: i + 1, properties: {},  // id 0 évité (feature-state)
+                    geometry: { type: 'LineString', coordinates: a.coords }
+                }))
+            });
+
+            altRoutes.forEach((a, i) => {
+                const el = document.createElement('div');
+                el.className = 'alt-chip';
+                el.innerHTML = `<b>${ALT_LETTERS[i]}</b>${a.diff.txt}`;
+                el.title = 'Prendre cette variante';
+                el.addEventListener('click', e => { e.stopPropagation(); chooseAlternative(i); });
+                el.addEventListener('mouseenter', () => _hlAlt(i));
+                el.addEventListener('mouseleave', () => _hlAlt(null));
+                altChips.push(new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat(a.pivot).addTo(map));
+            });
+
+            const box = document.getElementById('alt-box');
+            box.innerHTML = '<div class="bx-title">Variantes</div>' + altRoutes.map((a, i) => `
+                <button class="alt-row" onclick="chooseAlternative(${i})"
+                        onmouseenter="_hlAlt(${i})" onmouseleave="_hlAlt(null)">
+                    <span class="alt-tag">${ALT_LETTERS[i]}</span>
+                    <span class="alt-main">${a.distance_km} km · ${_fmtH(a.duration_h)}</span>
+                    <span class="alt-diff ${a.diff.cls}">${a.diff.txt}</span>
+                </button>`).join('') +
+                '<p class="bx-hint">Cliquez une variante pour la prendre : une étape est posée sur son tracé.</p>';
+            box.classList.add('show');
+        }
+        function chooseAlternative(i) {
+            const a = altRoutes[i];
+            if (!a) return;
+            toast(`Variante ${ALT_LETTERS[i]} : étape ajoutée sur son tracé`, 'info');
+            addWaypoint({ lng: a.pivot[0], lat: a.pivot[1] });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  ALERTES SUR LE TRAJET (trafic, restrictions)
+        // ═══════════════════════════════════════════════════════
+        // Événements que PTV rencontre SUR le tracé calculé : bouchons,
+        // chantiers, fermetures partielles (trafic) et restrictions que la
+        // route enfreint faute d'alternative (interdiction, gabarit, accès
+        // riverains...). Une route que PTV a évitée n'apparaît pas ici :
+        // pour la voir, décocher « Trafic en temps réel » et recalculer.
+
+        let alertMarkers = [];
+        function _clearAlerts() {
+            alertMarkers.forEach(m => m.remove());
+            alertMarkers = [];
+            const box = document.getElementById('alert-box');
+            box.innerHTML = ''; box.classList.remove('show');
+        }
+        function renderAlerts(d) {
+            _clearAlerts();
+            const list = (d && Array.isArray(d.alerts)) ? d.alerts : [];
+            const violated = !!(d && d.violated);
+            if (!list.length && !violated) return;
+
+            list.forEach(a => {
+                const el = document.createElement('div');
+                el.className = 'al-pin ' + a.kind;
+                el.textContent = a.kind === 'traffic' ? '!' : '✕';
+                const html = `<div class="popup-label">${esc(a.title)}</div>`
+                    + (a.detail ? `<div style="font-size:12.5px;color:var(--sub)">${esc(a.detail)}</div>` : '')
+                    + (a.km != null ? `<div style="font-size:12px;color:var(--sub);margin-top:4px">à ${a.km} km du départ</div>` : '');
+                alertMarkers.push(new maplibregl.Marker({ element: el, anchor: 'center' })
+                    .setLngLat([a.lng, a.lat])
+                    .setPopup(new maplibregl.Popup({ offset: 14, closeButton: false }).setHTML(html))
+                    .addTo(map));
+            });
+
+            const nT = list.filter(a => a.kind === 'traffic').length;
+            const nV = list.length - nT;
+            const resume = [nT ? `${nT} trafic` : '', nV ? `${nV} restriction${nV > 1 ? 's' : ''}` : '']
+                .filter(Boolean).join(' · ');
+            const box = document.getElementById('alert-box');
+            box.innerHTML = `<div class="bx-title">Sur le trajet${resume ? ' · ' + resume : ''}</div>`
+                + (violated ? '<div class="al-warn">Ce tracé enfreint une restriction pour un 40 t : PTV n\'a pas trouvé mieux avec les étapes données.</div>' : '')
+                + list.map((a, i) => `
+                <button class="al-row" onclick="focusAlert(${i})">
+                    <span class="al-ico ${a.kind}">${a.kind === 'traffic' ? '!' : '✕'}</span>
+                    <span class="al-txt">${esc(a.title)}${a.detail ? `<small>${esc(a.detail)}</small>` : ''}</span>
+                    <span class="al-km">${a.km != null ? a.km + ' km' : ''}</span>
+                </button>`).join('');
+            box.classList.add('show');
+        }
+        function focusAlert(i) {
+            const m = alertMarkers[i];
+            if (!m) return;
+            map.flyTo({ center: m.getLngLat(), zoom: Math.max(map.getZoom(), 12), duration: 700 });
+            if (!m.getPopup().isOpen()) m.togglePopup();
         }
 
         // ═══════════════════════════════════════════════════════
