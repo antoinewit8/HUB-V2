@@ -64,6 +64,8 @@ TOOLS = [
          icon="pie", cat="renta", desc="Lot sec ou groupage, km en route chaînée et km à vide par département."),
     dict(key="renta_benne", file="outils/renta_benne.py", title="Rentabilité benne", icon="truck", cat="renta",
          desc="Rotations benne : CA, km chargés, km à vide et rentabilité au kilomètre."),
+    dict(key="crossdock", file="outils/crossdock.py", title="Plateforme cross-dock", icon="dock", cat="renta",
+         desc="Où placer un quai de groupage : centre de gravité, détours, camions évités et bilan par site."),
     dict(key="txflex", file="outils/analyse_txflex.py", title="Analyse TX-FLEX", icon="gauge", cat="renta",
          desc="Fichiers TX-FLEX : km à vide, alertes du vendredi et rapport Excel."),
     dict(key="gasoil", file="outils/prix_gasoil.py", title="Prix gasoil", icon="fuel", cat="outils",
@@ -89,7 +91,9 @@ ICONS = {
     "drop": '<path d="M12 3.2s6 6.4 6 11a6 6 0 0 1-12 0c0-4.6 6-11 6-11z"/><path d="M9.2 15a2.9 2.9 0 0 0 2.8 2.6"/>',
     "swap": '<path d="M4 8h13M13.5 4.5 17 8l-3.5 3.5"/><path d="M20 16H7M10.5 12.5 7 16l3.5 3.5"/>',
     "hub": '<path d="M4 19 12 5l8 14"/><circle cx="12" cy="13.5" r="2.4"/><path d="M4 19h16"/>',
-    "calendar": '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'
+    "dock": '<path d="M3 20.5h18M5 20.5V10l7-4.5 7 4.5v10.5"/><path d="M9 20.5v-6h6v6"/>'
+            '<path d="M9 17.5h6"/>',
+    "calendar":'<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'
                 '<path d="M7.5 13.5h3M13.5 13.5h3M7.5 16.5h3"/>',
     "euro": '<path d="M17.5 6.6A7 7 0 1 0 17.5 17.4"/><path d="M4.5 10.5h9M4.5 13.5h9"/>',
     "people": '<circle cx="9" cy="8.5" r="3.3"/><path d="M3 19.5a6 6 0 0 1 12 0"/>'
