@@ -95,6 +95,11 @@ def lire_excel(contenu: bytes) -> pd.DataFrame:
                                                      "C.P. déchargement": str, "N° Dossier": str})
 
 
+@st.cache_data(show_spinner=False, max_entries=6)
+def paires(cle: str, _d: pd.DataFrame, fenetre: float, rayon: float, gain_min: float, allong: float):
+    return X.paires_directes(_d, fenetre, rayon, gain_min, allong)
+
+
 @st.cache_data(show_spinner=False, max_entries=3)
 def preparer(h_mis: str, h_ca: str, _mis: bytes, _ca: bytes | None):
     m = X.preparer_missions(lire_excel(_mis), geocodeur())
@@ -125,6 +130,10 @@ détour de chaque dossier s’il passait par le quai.</span></li>
 <li><b>Consolidation</b> <span>— les dossiers compatibles d’une même semaine vers une même zone partent ensemble
 du quai. On compte les camions évités, les km gagnés et perdus.</span></li>
 <li><b>Bilan</b> <span>— km nets × coût du km, moins la manutention et le coût du quai, ramené à l’année.</span></li>
+<li><b>Conseil par dossier</b> <span>— pour chaque charge : par quel quai la faire passer et avec quels dossiers
+la faire partir, ou la laisser en direct, et pourquoi.</span></li>
+<li><b>Regroupements directs</b> <span>— les paires de dossiers qui pourraient partager un camion sans quai,
+avec l’ordre de chargement et de livraison conseillé.</span></li>
 </ul></div>
 <div class="ap-note">Version test : km estimés au vol d’oiseau × 1,30, sans PTV. Les exports ne contiennent ni poids
 ni mètres de plancher : le nombre de lots qu’un camion peut regrouper est une hypothèse à régler.
@@ -418,6 +427,106 @@ with t2:
                      "detour": st.column_config.NumberColumn("Détour", format="%.0f km"),
                      "compatible": "Compatible", "consolide": "Regroupé"})
 
+# ─── Conseil par dossier ─────────────────────────────────────────────────────
+ui.section("Conseil par dossier")
+st.caption("Chaque charge est envoyée vers le quai qui lui coûte le moins de détour, parmi les quais retenus, "
+           "puis regroupée avec les autres charges de la semaine qui vont dans la même zone. "
+           "Sans partenaire ou avec trop de détour, elle reste en direct.")
+tous_sites = R["site"].tolist()
+defaut = [s for s in tous_sites if not s.startswith("Centre de gravité")][:2] or tous_sites[:1]
+retenus = st.multiselect("Quais retenus pour le réseau", tous_sites, default=defaut,
+                         help="Un seul quai, ou plusieurs pour couvrir des zones différentes. "
+                              "Le coût fixe est compté pour chaque quai réellement utilisé.")
+reco, G_res, B_res = X.affecter(d, detail, params, retenus) if retenus else (pd.DataFrame(), pd.DataFrame(), {})
+if reco.empty:
+    st.info("Choisissez au moins un quai.")
+else:
+    par_quai = " · ".join(f"{k.split(' (')[0]} {nb(v)}" for k, v in B_res["par_quai"].items()) or "aucun"
+    st.markdown('<div class="cd-kpis">'
+                + kpi(nb((reco["conseil"] == "Via quai").sum()), "charges via un quai", par_quai)
+                + kpi(nb(B_res["camions_evites"]), "camions évités", f"{nb(len(G_res))} départs regroupés")
+                + kpi(nb(B_res["km_net"]) + " km", "km nets économisés",
+                      f"{nb(B_res['km_economises'])} gagnés − {nb(B_res['km_ajoutes'])} ajoutés", signe=B_res["km_net"])
+                + kpi(eur(B_res["resultat_an_eur"]), "résultat du réseau par an",
+                      f"{len(B_res['quais_utilises'])} quai(s) utilisé(s)", signe=B_res["resultat_an_eur"])
+                + "</div>", unsafe_allow_html=True)
+    r1, r2 = st.columns([1, 2])
+    with r1:
+        f_conseil = st.segmented_control("Conseil", ["Tous", "Via quai", "Direct"], default="Via quai",
+                                         key="cd_f_conseil") or "Tous"
+    with r2:
+        f_dos = st.text_input("Chercher un dossier, un client ou une ville", key="cd_f_dos")
+    V = reco if f_conseil == "Tous" else reco[reco["conseil"] == f_conseil]
+    if f_dos.strip():
+        q = f_dos.strip().upper()
+        V = V[V[["dossier", "client", "route"]].astype(str).apply(lambda c: c.str.upper().str.contains(q, regex=False))
+              .any(axis=1)]
+    st.dataframe(V.sort_values(["semaine", "quai", "zone_livraison"])[
+        ["dossier", "date", "client", "route", "zone_livraison", "conseil", "quai", "partenaires", "detour_quai",
+         "explication"]], hide_index=True, width="stretch", height=460, column_config={
+        "dossier": "Dossier", "date": st.column_config.DatetimeColumn("Chargement", format="DD/MM/YY"),
+        "client": "Client", "route": st.column_config.TextColumn("Route", width="medium"), "zone_livraison": "Zone",
+        "conseil": "Conseil", "quai": "Quai",
+        "partenaires": st.column_config.TextColumn("Partir avec", width="medium"),
+        "detour_quai": st.column_config.NumberColumn("Détour", format="%.0f km"),
+        "explication": st.column_config.TextColumn("Pourquoi", width="large")})
+
+# ─── Regroupements directs ───────────────────────────────────────────────────
+ui.section("Regroupements directs, sans quai")
+st.caption("Deux charges qui pourraient partager un camion : chargements proches, dates proches, livraisons "
+           "dans la même direction. Chaque dossier n’apparaît qu’une fois, les meilleures paires d’abord. "
+           "À vérifier : les deux lots doivent tenir ensemble sur la remorque.")
+p1, p2, p3, p4 = st.columns(4)
+with p1:
+    fenetre = st.number_input("Écart de dates max. (jours)", 0.0, 7.0, 2.0, 0.5)
+with p2:
+    rayon = st.number_input("Chargements à moins de (km)", 5, 200, 50, 5, help="À vol d’oiseau.")
+with p3:
+    gain_min = st.number_input("Gain min. (km)", 0, 1000, 100, 25)
+with p4:
+    allong = st.number_input("Allongement max. (%)", 0, 200, 40, 5,
+                             help="La route commune ne doit pas dépasser la plus longue des deux routes de plus de ce %.")
+clients_p = sorted(d["client"].dropna().astype(str).unique())
+f_cli = st.multiselect("Limiter aux clients (charges partielles)", clients_p, default=[], placeholder="Tous les clients",
+                       help="Utile pour ne garder que les clients dont les lots ne remplissent pas une remorque.")
+dp = d[d["client"].isin(f_cli)] if f_cli else d
+cle_p = hashlib.md5((",".join(sorted(dp["dossier"])) + f"|{fenetre}|{rayon}|{gain_min}|{allong}").encode()).hexdigest()
+if st.session_state.get("cd_paires_cle") != cle_p:
+    if st.button(f"Chercher les regroupements ({nb(len(dp))} dossiers)", type="primary"):
+        with st.spinner("Comparaison des dossiers deux à deux…"):
+            st.session_state["cd_paires"] = paires(cle_p, dp, float(fenetre), float(rayon), float(gain_min),
+                                                   float(allong))
+            st.session_state["cd_paires_cle"] = cle_p
+        st.rerun()
+    P = None
+else:
+    P = st.session_state.get("cd_paires")
+if P is not None:
+    if P.empty:
+        st.info("Aucune paire avec ces critères.")
+    else:
+        st.markdown('<div class="cd-kpis">'
+                    + kpi(nb(len(P)), "paires proposées", f"{nb(2 * len(P))} dossiers")
+                    + kpi(nb(P["km_gagnes"].sum()) + " km", "km économisés", f"médiane {nb(P['km_gagnes'].median())} km / paire",
+                          signe=1)
+                    + kpi(eur(P["km_gagnes"].sum() * cout_km), "au coût du km", f"{eur(P['km_gagnes'].sum() * cout_km * 12 / mois)} / an",
+                          signe=1)
+                    + kpi(pct(P["meme_client"].mean() * 100), "entre dossiers du même client",
+                          f"{nb(P['meme_client'].sum())} paires")
+                    + "</div>", unsafe_allow_html=True)
+        st.dataframe(P[["dossier_a", "dossier_b", "date_a", "ecart_jours", "client_a", "client_b", "route_a", "route_b",
+                        "km_entre_chargements", "km_separes", "km_ensemble", "km_gagnes", "ordre"]],
+                     hide_index=True, width="stretch", height=460, column_config={
+                         "dossier_a": "Dossier A", "dossier_b": "Dossier B",
+                         "date_a": st.column_config.DatetimeColumn("Date A", format="DD/MM/YY"),
+                         "ecart_jours": st.column_config.NumberColumn("Écart", format="%.1f j"),
+                         "client_a": "Client A", "client_b": "Client B", "route_a": "Route A", "route_b": "Route B",
+                         "km_entre_chargements": st.column_config.NumberColumn("Entre chargements", format="%.0f km"),
+                         "km_separes": st.column_config.NumberColumn("Km séparés", format="%.0f"),
+                         "km_ensemble": st.column_config.NumberColumn("Km ensemble", format="%.0f"),
+                         "km_gagnes": st.column_config.NumberColumn("Gagnés", format="%.0f km"),
+                         "ordre": st.column_config.TextColumn("Ordre conseillé", width="large")})
+
 
 # ─── Export Excel ────────────────────────────────────────────────────────────
 def export_excel() -> bytes:
@@ -448,6 +557,10 @@ def export_excel() -> bytes:
         T.to_excel(xw, sheet_name="Activité", index=False)
         gd.to_excel(xw, sheet_name="Départs regroupés", index=False)
         dos_x.to_excel(xw, sheet_name="Dossiers", index=False)
+        if not reco.empty:
+            reco.drop(columns=["quai_le_plus_proche"]).to_excel(xw, sheet_name="Conseil par dossier", index=False)
+        if P is not None and not P.empty:
+            P.to_excel(xw, sheet_name="Regroupements directs", index=False)
         for ws in xw.book.worksheets:
             for c in ws[1]:
                 c.font = Font(color="FFFFFF", bold=True)
@@ -469,4 +582,5 @@ def export_excel() -> bytes:
 
 st.download_button("Télécharger l’étude (Excel)", export_excel(), f"crossdock_{datetime.now():%Y%m%d}.xlsx",
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-st.caption("Les onglets « Départs regroupés » et « Dossiers » portent sur le site choisi dans le détail.")
+st.caption("Les onglets « Départs regroupés » et « Dossiers » portent sur le site choisi dans le détail ; "
+           "« Conseil par dossier » sur les quais retenus ; « Regroupements directs » s’ils ont été cherchés.")

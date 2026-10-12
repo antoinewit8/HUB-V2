@@ -298,7 +298,7 @@ def detours(d: pd.DataFrame, site, coef=COEF_ROUTE) -> pd.DataFrame:
 
 
 def simuler(d: pd.DataFrame, det: pd.DataFrame, seuil_km: float, seuil_pct: float, lots_camion: int,
-            groupage_seul: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+            groupage_seul: bool = False, eligibles: set | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Consolidation par semaine × zone de livraison.
 
     Dossier compatible : détour ≤ seuil_km ET ≤ seuil_pct % de la route réelle.
@@ -312,7 +312,7 @@ def simuler(d: pd.DataFrame, det: pd.DataFrame, seuil_km: float, seuil_pct: floa
     x["compatible"] = (x["detour"] <= seuil_km) & (x["detour"] <= x["km_reel"] * seuil_pct / 100)
     if groupage_seul:
         x["compatible"] &= x["groupage"]
-    c = x[x["compatible"]]
+    c = x[x["compatible"]] if eligibles is None else x[x["compatible"] & x["dossier"].isin(eligibles)]
     if c.empty:
         g = pd.DataFrame(columns=["semaine", "zone_livraison", "dossiers", "camions", "camions_evites",
                                   "km_site_D1", "km_economises", "km_detours", "km_tournee", "km_ajoutes",
@@ -381,3 +381,160 @@ def comparer_sites(d: pd.DataFrame, sites: pd.DataFrame, pts: pd.DataFrame, para
         res.append(b)
         detail[s.nom] = (x, g)
     return pd.DataFrame(res), detail
+
+
+# ─── Recommandation par dossier (réseau de quais) ────────────────────────────
+COLS_DET = ["km_reel", "km_via", "detour", "km_site_D1", "km_C_site"]
+
+
+def affecter(d: pd.DataFrame, detail: dict, params: dict, sites_retenus: list[str] | None = None):
+    """Chaque dossier est affecté au quai retenu qui lui coûte le moins de détour (s'il est compatible),
+    puis la consolidation est refaite quai par quai sur les seuls dossiers affectés.
+
+    Renvoie (reco, groupes, bilan_reseau) :
+      reco    : une ligne par dossier avec le conseil (via quel quai, avec quels dossiers, ou direct) ;
+      groupes : départs regroupés de tous les quais retenus (colonne « site ») ;
+      bilan   : totaux du réseau, coût fixe compté seulement pour les quais réellement utilisés.
+    """
+    noms = [s for s in (sites_retenus or list(detail)) if s in detail]
+    base = d[d["statut"].eq("ok")]
+    if not noms or base.empty:
+        return pd.DataFrame(), pd.DataFrame(), {}
+    det_mat = pd.DataFrame({s: detail[s][0]["detour"] for s in noms})
+    comp_mat = pd.DataFrame({s: detail[s][0]["compatible"] for s in noms}).fillna(False).astype(bool)
+    det_ok = det_mat.where(comp_mat)
+
+    def _argmin(m: pd.DataFrame) -> pd.Series:
+        out = pd.Series(np.nan, index=m.index, dtype=object)
+        lignes = m.notna().any(axis=1)
+        if lignes.any():
+            out[lignes] = m[lignes].idxmin(axis=1)
+        return out
+
+    meilleur, plus_proche = _argmin(det_ok), _argmin(det_mat)
+
+    groupes, membre = [], {}
+    for s in noms:
+        assignes = set(base.loc[meilleur[meilleur == s].index, "dossier"])
+        if not assignes:
+            continue
+        x = detail[s][0]
+        _, g = simuler(base, x[COLS_DET], params["seuil_km"], params["seuil_pct"], params["lots_camion"],
+                       params["groupage_seul"], eligibles=assignes)
+        if g.empty:
+            continue
+        g = g.assign(site=s)
+        groupes.append(g)
+        for r in g.itertuples(index=False):
+            lst = [v.strip() for v in r.liste.split(",")]
+            for v in lst:
+                membre[v] = (s, r.semaine, r.zone_livraison, [w for w in lst if w != v], r.camions, r.dossiers)
+    G = pd.concat(groupes, ignore_index=True) if groupes else pd.DataFrame(
+        columns=["site", "semaine", "zone_livraison", "dossiers", "camions", "camions_evites", "km_economises",
+                 "km_ajoutes", "km_net", "ca", "liste"])
+
+    lignes = []
+    for i, r in base.iterrows():
+        dos = r["dossier"]
+        dmin = det_mat.loc[i, plus_proche.loc[i]] if pd.notna(plus_proche.loc[i]) else np.nan
+        if dos in membre:
+            s, sem, zo, autres, cam, n = membre[dos]
+            conseil, quai = "Via quai", s
+            detail_txt = (f"Passer par {s.split(' (')[0]}, partir avec {', '.join(autres)} "
+                          f"({n} lots en {cam} camion{'s' if cam > 1 else ''} vers {zo})")
+            partenaires = ", ".join(autres)
+            det_retenu = det_mat.loc[i, s]
+        elif pd.notna(meilleur.loc[i]):
+            s = meilleur.loc[i]
+            conseil, quai, partenaires, det_retenu = "Direct", "", "", np.nan
+            detail_txt = (f"Compatible avec {s.split(' (')[0]} (détour {det_mat.loc[i, s]:.0f} km), "
+                          f"mais aucun autre lot vers {r['zone_livraison']} cette semaine")
+        else:
+            conseil, quai, partenaires, det_retenu = "Direct", "", "", np.nan
+            detail_txt = (f"Trop de détour : {dmin:.0f} km au mieux ({str(plus_proche.loc[i]).split(' (')[0]})"
+                          if pd.notna(dmin) else "Non calculé")
+        lignes.append({"dossier": dos, "semaine": r["semaine"], "date": r["dt"], "client": r["client"],
+                       "type": r["type"], "route": f"{r['ville_C1']} → {r['ville_Dn']}",
+                       "zone_livraison": r["zone_livraison"], "prix": r["prix"],
+                       "conseil": conseil, "quai": quai, "partenaires": partenaires,
+                       "detour_quai": det_retenu, "detour_min": dmin,
+                       "quai_le_plus_proche": plus_proche.loc[i], "explication": detail_txt})
+    reco = pd.DataFrame(lignes)
+
+    km_eco = float(G["km_economises"].sum()) if len(G) else 0.0
+    km_aj = float(G["km_ajoutes"].sum()) if len(G) else 0.0
+    lots = int(G["dossiers"].sum()) if len(G) else 0
+    utilises = sorted(G["site"].unique()) if len(G) else []
+    gain = (km_eco - km_aj) * params["cout_km"]
+    cout = lots * params["manut_lot"] + params["quai_mois"] * params["mois"] * len(utilises)
+    mois = params["mois"]
+    bil = {"quais_utilises": utilises, "lots": lots, "camions_evites": int(G["camions_evites"].sum()) if len(G) else 0,
+           "km_economises": km_eco, "km_ajoutes": km_aj, "km_net": km_eco - km_aj,
+           "resultat_eur": gain - cout, "resultat_an_eur": (gain - cout) * MOIS_PAR_AN / mois if mois else np.nan,
+           "par_quai": reco[reco["conseil"].eq("Via quai")]["quai"].value_counts().to_dict()}
+    return reco, G, bil
+
+
+# ─── Regroupements directs (sans quai) ───────────────────────────────────────
+def paires_directes(d: pd.DataFrame, fenetre_jours: float = 2, rayon_charg: float = 50, gain_min: float = 100,
+                    allongement_max_pct: float = 40, coef=COEF_ROUTE) -> pd.DataFrame:
+    """Deux dossiers qui pourraient partager un camion, sans quai.
+
+    Candidats : premiers chargements à moins de `rayon_charg` km à vol d'oiseau et dates de
+    chargement à moins de `fenetre_jours` jours. Route commune = chargements de A et B,
+    puis déchargements de A et B, dans le meilleur des 4 ordres. Retenu si les km
+    économisés (route A + route B − route commune) dépassent `gain_min` et si la route
+    commune n'allonge pas de plus de `allongement_max_pct` % la plus longue des deux.
+    Chaque dossier n'est proposé qu'une fois (les meilleures paires d'abord).
+    """
+    b = d[d["statut"].eq("ok")].copy()
+    if len(b) < 2:
+        return pd.DataFrame()
+    b["t"] = pd.to_datetime(b["dt"])
+    b = b[b["t"].notna()].sort_values("t").reset_index(drop=True)
+    jours = ((b["t"] - b["t"].min()).dt.total_seconds() / 86400).to_numpy()
+    c1 = np.array([p[0] for p in b["C"]], float)
+    reel = np.array([chemin(s, coef) for s in b["seq"]])
+    cands = []
+    j0 = 0
+    for i in range(len(b)):
+        while jours[i] - jours[j0] > fenetre_jours:
+            j0 += 1
+        js = np.arange(j0, i)
+        if not len(js):
+            continue
+        dist = W.hav(c1[i, 0], c1[i, 1], c1[js, 0], c1[js, 1])
+        for j in js[dist <= rayon_charg]:
+            A, B = b.loc[j], b.loc[i]
+            ordres = [(A["C"] + B["C"] + A["D"] + B["D"], "A", "B", "A", "B"),
+                      (A["C"] + B["C"] + B["D"] + A["D"], "A", "B", "B", "A"),
+                      (B["C"] + A["C"] + A["D"] + B["D"], "B", "A", "A", "B"),
+                      (B["C"] + A["C"] + B["D"] + A["D"], "B", "A", "B", "A")]
+            best = min(ordres, key=lambda o: chemin(o[0], coef))
+            ens = chemin(best[0], coef)
+            sep = reel[i] + reel[j]
+            gain = sep - ens
+            if gain < gain_min or ens > max(reel[i], reel[j]) * (1 + allongement_max_pct / 100):
+                continue
+            v = {"A": A, "B": B}
+            ordre = " → ".join([f"charger {v[best[1]]['dossier']}", f"charger {v[best[2]]['dossier']}",
+                                f"livrer {v[best[3]]['dossier']}", f"livrer {v[best[4]]['dossier']}"])
+            cands.append({"dossier_a": A["dossier"], "dossier_b": B["dossier"],
+                          "date_a": A["t"], "date_b": B["t"], "ecart_jours": round(abs(jours[i] - jours[j]), 1),
+                          "client_a": A["client"], "client_b": B["client"],
+                          "route_a": f"{A['ville_C1']} → {A['ville_Dn']}", "route_b": f"{B['ville_C1']} → {B['ville_Dn']}",
+                          "km_entre_chargements": round(float(dist[js == j][0]) * coef, 0),
+                          "km_separes": sep, "km_ensemble": ens, "km_gagnes": gain,
+                          "gain_pct": gain / sep * 100 if sep else np.nan, "ordre": ordre,
+                          "meme_client": A["client"] == B["client"],
+                          "ca": (A["prix"] if pd.notna(A["prix"]) else 0) + (B["prix"] if pd.notna(B["prix"]) else 0)})
+    if not cands:
+        return pd.DataFrame()
+    P = pd.DataFrame(cands).sort_values("km_gagnes", ascending=False)
+    pris, garde = set(), []
+    for k, r in P.iterrows():
+        if r["dossier_a"] in pris or r["dossier_b"] in pris:
+            continue
+        pris.update((r["dossier_a"], r["dossier_b"]))
+        garde.append(k)
+    return P.loc[garde].reset_index(drop=True)
