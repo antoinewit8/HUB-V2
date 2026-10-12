@@ -250,8 +250,11 @@ def _heure_td(v):
         return v
     if hasattr(v, "hour"):
         return pd.Timedelta(hours=v.hour, minutes=v.minute)
+    s = str(v).strip()
+    if re.fullmatch(r"\d{1,2}:\d{2}", s):          # « 07:00 » : pandas exige hh:mm:ss
+        s += ":00"
     try:
-        return pd.to_timedelta(str(v))
+        return pd.to_timedelta(s)
     except Exception:
         return pd.Timedelta(0)
 

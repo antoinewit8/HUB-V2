@@ -56,6 +56,8 @@ TOOLS = [
          desc="Les dossiers qui peuvent passer par Werbomont : détour en km et rentabilité, sur carte."),
     dict(key="aide_planning", file="outils/aide_planning.py", title="Aide planning", icon="calendar",
          cat="planning", desc="Vue planeur des chargements et déchargements, par jour ou par ressource."),
+    dict(key="groupage", file="outils/optimiseur_groupage.py", title="Optimiseur de groupage", icon="merge",
+         cat="planning", desc="Associe les commandes à faire en camions groupés : remplissage, dates, tournée la plus courte."),
     dict(key="missions_ca_km", file="outils/missions_ca_km.py", title="Missions, CA et KM", icon="euro",
          cat="renta", desc="Missions et chiffre d’affaires consolidés, km chargés et à vide calculés via PTV."),
     dict(key="tractionnaires", file="outils/tractionnaires_km.py", title="Tractionnaires KM", icon="people",
@@ -91,7 +93,8 @@ ICONS = {
     "drop": '<path d="M12 3.2s6 6.4 6 11a6 6 0 0 1-12 0c0-4.6 6-11 6-11z"/><path d="M9.2 15a2.9 2.9 0 0 0 2.8 2.6"/>',
     "swap": '<path d="M4 8h13M13.5 4.5 17 8l-3.5 3.5"/><path d="M20 16H7M10.5 12.5 7 16l3.5 3.5"/>',
     "hub": '<path d="M4 19 12 5l8 14"/><circle cx="12" cy="13.5" r="2.4"/><path d="M4 19h16"/>',
-    "dock": '<path d="M3 20.5h18M5 20.5V10l7-4.5 7 4.5v10.5"/><path d="M9 20.5v-6h6v6"/>'
+    "merge": '<path d="M4 5.5h4.5l4 6.5h7.5"/><path d="M4 18.5h4.5l4-6.5"/><path d="M17 9l3 3-3 3"/>',
+    "dock":'<path d="M3 20.5h18M5 20.5V10l7-4.5 7 4.5v10.5"/><path d="M9 20.5v-6h6v6"/>'
             '<path d="M9 17.5h6"/>',
     "calendar":'<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'
                 '<path d="M7.5 13.5h3M13.5 13.5h3M7.5 16.5h3"/>',
