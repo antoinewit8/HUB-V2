@@ -67,7 +67,7 @@
         #endpoints { display: flex; align-items: center; gap: 10px; }
         #ep-fields {
             flex: 1; min-width: 0; background: #fff; border: 1px solid var(--line); border-radius: 14px;
-            transition: border-color .15s, box-shadow .15s;
+            overflow: hidden; transition: border-color .15s, box-shadow .15s;
         }
         #ep-fields:focus-within { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(0,113,227,.16); }
         .ep-row { display: flex; align-items: center; gap: 10px; padding-left: 14px; height: 48px; }
@@ -293,33 +293,42 @@
         .alt-chip b { color: #6b7785; margin-right: 4px; }
         .alt-chip:hover, .alt-chip.hl { background: #fff; box-shadow: 0 0 0 2px #8e9aa8, 0 2px 8px rgba(0,0,0,.25); }
 
-        /* ── Étapes ── */
+        /* ── Étapes : intercalées entre départ et arrivée, dans le même bloc ── */
+        .ep-num { width: 18px; height: 18px; border-radius: 50%; background: var(--c, var(--blue)); color: #fff;
+            display: flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700;
+            box-shadow: 0 0 0 2px #fff; font-variant-numeric: tabular-nums; position: relative; z-index: 1; }
+        .ep-num.bump { animation: wpBump .5s var(--ease); }
+        .ep-num.draft { background: #fff; border: 2px dashed #c7c7cc; box-shadow: none; }
+        .ep-row.wp .ep-icon { cursor: grab; }
+        .ep-row.wp .ep-input { font-size: 14px; }
+        .ep-row { transition: background .15s; }
+        .ep-row.hl { background: var(--bg); }
+        .ep-row.moved { animation: epFlash 1s ease-out; }
+        .ep-row.dragging { opacity: .4; }
+        .ep-row.drop-before { box-shadow: inset 0 3px 0 var(--blue); }
+        .ep-row.drop-after { box-shadow: inset 0 -3px 0 var(--blue); }
+
+        /* Flèches discrètes : visibles au survol de la ligne (un peu visibles au tactile) */
+        .ep-moves { flex: none; display: flex; flex-direction: column; gap: 1px; margin-right: 6px;
+            opacity: 0; transition: opacity .15s; }
+        .ep-row:hover .ep-moves, .ep-row:focus-within .ep-moves { opacity: 1; }
+        @media (hover: none) { .ep-moves { opacity: .6; } }
+        .ep-moves button { width: 20px; height: 16px; padding: 0; border: none; border-radius: 5px; background: transparent;
+            color: #8e8e93; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .ep-moves button:hover { background: var(--soft); color: var(--blue); }
+        .ep-moves button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+        .ep-moves button.off { visibility: hidden; }
+        .ep-moves svg { display: block; }
+
+        #ep-add { display: none; align-items: center; gap: 10px; width: 100%; height: 38px; padding: 0 14px; border: none;
+            border-top: .5px solid var(--hair); border-radius: 0 0 13px 13px; background: transparent; color: var(--blue);
+            font-size: 13.5px; font-weight: 500; cursor: pointer; text-align: left; transition: background .15s; }
+        #ep-add.show { display: flex; }
+        #ep-add:hover { background: #f5f9fe; }
+        #ep-add .plus { width: 18px; text-align: center; font-size: 17px; line-height: 1; }
+
         #wp-container { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--hair); }
-        #wp-list { margin-bottom: 4px; }
-        .wp-empty { margin: 0; padding: 14px; border-radius: 12px; background: var(--bg);
-            color: var(--sub); font-size: 13px; text-align: center; }
-        .wp-item { --c: var(--blue); position: relative; display: flex; align-items: center; gap: 8px; background: #fff;
-            padding: 8px 8px 8px 6px; margin-bottom: 8px; border-radius: 12px; border-left: 3px solid var(--c);
-            box-shadow: var(--tile); transition: box-shadow .15s, background .15s; cursor: grab; user-select: none; }
-        .wp-item.hl { box-shadow: 0 0 0 2px var(--c), var(--tile); }
-        .wp-item.moved { animation: wpFlash 1s ease-out; }
-        .wp-item.dragging { opacity: .4; cursor: grabbing; }
-        .wp-item.drop-before::before, .wp-item.drop-after::after { content: ''; position: absolute; left: 6px; right: 6px;
-            height: 3px; border-radius: 2px; background: var(--blue); }
-        .wp-item.drop-before::before { top: -6px; }
-        .wp-item.drop-after::after { bottom: -6px; }
-        .wp-grip { flex: none; width: 10px; color: #c7c7cc; font-size: 12px; letter-spacing: -2px; line-height: 1; text-align: center; }
-        .wp-num { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #fff;
-            display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
-            box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.25); font-variant-numeric: tabular-nums; }
-        .wp-num.bump { animation: wpBump .5s var(--ease); }
-        .wp-label { flex: 1; min-width: 0; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis;
-            white-space: nowrap; cursor: pointer; }
-        .wp-arrows { display: flex; flex-direction: column; gap: 2px; }
-        .wp-item button { width: 24px; height: 17px; padding: 0 !important; border: none !important; border-radius: 6px !important;
-            background: var(--soft) !important; color: var(--sub); font-size: 8px !important; line-height: 17px; cursor: pointer; }
-        .wp-item button:hover:not(:disabled) { background: #dedee3 !important; color: var(--text); }
-        .wp-item button:disabled { opacity: .35; cursor: default; }
+        #wp-container .btn-save { margin-top: 0; }
 
         /* Repère étape sur la carte : couleur fixe, numéro = rang dans le trajet */
         .wp-pin { cursor: grab; }
@@ -334,7 +343,7 @@
         .wp-pin-in.bump { animation: wpPinBump .6s var(--ease); }
         @keyframes wpBump { 40% { transform: scale(1.35); } }
         @keyframes wpPinBump { 30% { transform: translateY(-10px) scale(1.2); } 60% { transform: translateY(0) scale(.95); } }
-        @keyframes wpFlash { from { background: color-mix(in srgb, var(--c) 22%, #fff); } }
+        @keyframes epFlash { from { background: #eaf3fe; } }
         .wp-remove { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--soft); color: var(--sub);
             display: flex; align-items: center; justify-content: center; font-size: 11px; cursor: pointer;
             transition: background .15s, color .15s; }
@@ -516,8 +525,13 @@
                             <span class="ep-clear off" id="clr-origin"
                                   onclick="clearPoint('origin', true)" title="Effacer le départ">✕</span>
                         </div>
+                        <span class="ep-moves">
+                            <button type="button" class="off" tabindex="-1" aria-hidden="true"><svg width="10" height="7" viewBox="0 0 10 7"><path d="M1 6l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                            <button type="button" id="mv-origin" onclick="shiftPoint('origin', 1)"><svg width="10" height="7" viewBox="0 0 10 7"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                        </span>
                     </div>
                     <div class="ep-link"></div>
+                    <div id="ep-wps"></div>
                     <div class="ep-row" id="ep-row-dest">
                         <span class="ep-icon"><span class="ep-pin"></span></span>
                         <div class="ep-input-wrap">
@@ -527,10 +541,15 @@
                             <span class="ep-clear off" id="clr-dest"
                                   onclick="clearPoint('dest', true)" title="Effacer l'arrivée">✕</span>
                         </div>
+                        <span class="ep-moves">
+                            <button type="button" id="mv-dest" onclick="shiftPoint('dest', -1)"><svg width="10" height="7" viewBox="0 0 10 7"><path d="M1 6l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                            <button type="button" class="off" tabindex="-1" aria-hidden="true"><svg width="10" height="7" viewBox="0 0 10 7"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                        </span>
                     </div>
+                    <button type="button" id="ep-add" onclick="openDraftWaypoint()"><span class="plus">+</span>Ajouter une étape</button>
                 </div>
                 <button id="btn-swap" onclick="swapEndpoints()" disabled
-                        title="Inverser départ et arrivée" aria-label="Inverser départ et arrivée">⇅</button>
+                        title="Inverser tout le trajet" aria-label="Inverser tout le trajet">⇅</button>
             </div>
 
             <div id="ep-suggest"></div>
@@ -615,8 +634,6 @@
                 <div id="ferry-box"></div>
 
                 <div id="wp-container">
-                    <h4>Étapes du trajet</h4>
-                    <div id="wp-list"><p class="wp-empty">Aucune étape ajoutée.</p></div>
                     <button class="btn btn-save" id="btn-save" onclick="openSaveModal()" disabled>Enregistrer comme référence</button>
                     <div class="btn-row">
                         <button class="btn btn-reset" id="btn-reset" onclick="resetToOriginal()" disabled>Revenir au tracé</button>
@@ -637,14 +654,15 @@
                 <button id="search-btn" onclick="searchAddress()">Rechercher</button>
                 <div id="search-error"></div>
                 <div id="search-results"></div>
-                <div id="search-hint">Pratique pour ajouter une étape. Le départ et l'arrivée se tapent directement en haut.</div>
+                <div id="search-hint">Pratique pour ajouter une étape. Le départ, les étapes et l'arrivée se tapent aussi directement en haut.</div>
             </div>
 
             <div class="sec instructions">
                 <h4>Raccourcis</h4>
                 <div class="hint">
                     <p><span class="kbd">⌨</span><span><b>Départ / Arrivée</b> : tapez une adresse ou des coordonnées, les suggestions s'affichent.</span></p>
-                    <p><span class="kbd">⇅</span><span><b>Inverser</b> le départ et l'arrivée.</span></p>
+                    <p><span class="kbd">⇅</span><span><b>Inverser</b> tout le trajet.</span></p>
+                    <p><span class="kbd">↕</span><span><b>Flèches au survol d'une ligne</b> : change l'ordre ; une étape peut devenir le départ ou l'arrivée.</span></p>
                     <p><span class="kbd">●</span><span><b>Clic sur la carte</b> : pose le départ, puis l'arrivée.</span></p>
                     <p><span class="kbd">＋</span><span><b>Clic droit</b> : ajoute une étape.</span></p>
                     <p><span class="kbd">↔</span><span><b>Glisser un point</b> : recalcule le trajet.</span></p>
@@ -727,6 +745,7 @@
         let origin = null;          // { lng, lat, label }
         let dest   = null;
         let waypoints = [];         // [{ id, marker, color, label }]
+        let draftWp = false;        // ligne « nouvelle étape » ouverte dans le bloc du haut
 
         let originMarker = null, destMarker = null;
 
@@ -944,6 +963,7 @@
         function newRoute() {
             waypoints.forEach(wp => wp.marker.remove());
             waypoints = [];
+            draftWp = false;
             origin = dest = null;
             hasRoute = false; routeKnown = false; isModified = false; forceReference = false;
             geojsonCoords = []; originalGeojsonCoords = [];
@@ -974,6 +994,9 @@
             document.getElementById('btn-calc').textContent =
                 hasRoute ? 'Recalculer' : 'Calculer l\'itinéraire';
             document.getElementById('btn-swap').disabled = !(origin || dest);
+            _syncEndArrows();
+            document.getElementById('ep-add').classList.toggle('show', ready && !draftWp);
+            _syncWpInputs();
 
             document.getElementById('stats-box').classList.toggle('show', hasRoute);
             document.getElementById('panel-title').textContent =
@@ -1032,9 +1055,10 @@
         function _epInput(role) { return document.getElementById('in-' + role); }
         function _countryFilter() { return document.getElementById('search-country').value; }
 
-        EP_ROLES.forEach(role => {
-            const inp = _epInput(role);
+        EP_ROLES.forEach(role => _bindEpInput(_epInput(role), role));
 
+        // Rôles : 'origin', 'dest', 'wp-<id>' (étape posée) ou 'wp-new' (étape en cours d'ajout).
+        function _bindEpInput(inp, role) {
             inp.addEventListener('focus', () => {
                 if (sg.role !== role) closeSuggest();
                 sg.role = role;
@@ -1053,10 +1077,12 @@
                 setTimeout(() => {
                     if (document.activeElement === inp) return;
                     if (sg.role === role) closeSuggest();
+                    // Étape ouverte avec « Ajouter une étape » mais rien choisi : on la retire.
+                    if (role === 'wp-new' && draftWp) { draftWp = false; updateWaypointsList(); }
                     refreshPanel();   // remet l'adresse d'avant si rien n'a été choisi
                 }, 120);
             });
-        });
+        }
 
         // Les clics dans la liste passent par mousedown + preventDefault : le champ
         // garde le focus, sinon le blur fermerait la liste avant le clic.
@@ -1202,6 +1228,7 @@
         }
 
         function _chooseEndpoint(role, hit) {
+            if (role.startsWith('wp-')) return _chooseWaypoint(role, hit);
             closeSuggest();
             const inp = _epInput(role);
             inp.blur();
@@ -1218,6 +1245,28 @@
                 map.flyTo({ center: [hit.lng, hit.lat], zoom: Math.max(map.getZoom(), 10), duration: 700 });
                 _epInput(otherRole).focus();
             }
+        }
+
+        function _chooseWaypoint(role, hit) {
+            closeSuggest();
+            const isCoords = hit.src === 'coords';
+            const label = isCoords ? null : hitLabel(hit).full;
+            const ll = { lng: hit.lng, lat: hit.lat };
+            if (role === 'wp-new') {
+                draftWp = false;
+                _epInput(role).blur();
+                updateWaypointsList();
+                addWaypoint(ll, label);
+                return;
+            }
+            const wp = waypoints.find(w => 'wp-' + w.id === role);
+            _epInput(role).blur();
+            if (!wp) return;
+            wp.marker.setLngLat([ll.lng, ll.lat]);
+            wp.label = label || coordLabel(ll);
+            updateWaypointsList({ flash: [wp.id] });
+            autoCalculate();
+            if (!label) _resolveWaypointLabel(wp);
         }
 
         function _parseCoords(q) {
@@ -2162,7 +2211,7 @@
             });
             marker.getElement().addEventListener('dblclick', e => { e.stopPropagation(); removeWaypoint(id); });
 
-            updateWaypointsList();
+            updateWaypointsList({ flash: [id] });
             autoCalculate();
             if (!label) _resolveWaypointLabel(wp);
         }
@@ -2173,7 +2222,7 @@
             if (!hit || !waypoints.includes(wp)) return;
             const now = wp.marker.getLngLat();
             if (now.lat !== ll.lat || now.lng !== ll.lng) return;
-            wp.label = hitLabel(hit).short;
+            wp.label = hitLabel(hit).full;
             updateWaypointsList();
         }
 
@@ -2212,14 +2261,14 @@
             autoCalculate();
         }
 
-        // Survol croisé liste ↔ carte
+        // Survol croisé bloc du haut ↔ carte
         function _hlWp(id, on) {
             const wp = waypoints.find(w => w.id === id);
             if (!wp) return;
             const pin = wp.marker.getElement();
             pin.querySelector('.wp-pin-in').classList.toggle('hl', on);
             pin.style.zIndex = on ? 10 : '';
-            const row = document.querySelector(`.wp-item[data-id="${id}"]`);
+            const row = document.querySelector(`#ep-wps .ep-row[data-id="${id}"]`);
             if (row) row.classList.toggle('hl', on);
         }
 
@@ -2244,93 +2293,265 @@
             return changed;
         }
 
-        function updateWaypointsList(opts = {}) {
-            const list = document.getElementById('wp-list');
-            const changed = _syncPinNumbers(!!opts.animate);
-            if (!waypoints.length) {
-                list.innerHTML = '<p class="wp-empty">Aucune étape ajoutée.</p>';
-                return;
+        // ── Flèches : réordonner, ou échanger une étape avec le départ / l'arrivée ──
+        const ARROW_UP = '<svg width="10" height="7" viewBox="0 0 10 7"><path d="M1 6l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const ARROW_DN = '<svg width="10" height="7" viewBox="0 0 10 7"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+        // kind : 'origin', 'dest' ou 'wp' (avec id) ; dir : -1 = monter, 1 = descendre.
+        function shiftPoint(kind, dir, id) {
+            closeSuggest();
+            const n = waypoints.length;
+            if (kind === 'origin') {
+                if (!origin) return;
+                return n ? _swapEndWithWp('origin', 0) : swapEndpoints();
             }
+            if (kind === 'dest') {
+                if (!dest) return;
+                return n ? _swapEndWithWp('dest', n - 1) : swapEndpoints();
+            }
+            const i = waypoints.findIndex(w => w.id === id);
+            if (i === -1) return;
+            if (dir < 0 && i === 0)     return _swapEndWithWp('origin', 0);
+            if (dir > 0 && i === n - 1) return _swapEndWithWp('dest', n - 1);
+            _moveWaypointTo(i, i + dir);
+        }
 
-            // FLIP : on mémorise la position de chaque ligne avant de redessiner
-            const before = {};
-            list.querySelectorAll('.wp-item').forEach(el => { before[el.dataset.id] = el.getBoundingClientRect().top; });
+        // L'étape k prend la place du départ (ou de l'arrivée) et inversement.
+        // L'objet étape garde sa couleur : seuls les points échangent leur place.
+        function _swapEndWithWp(role, k) {
+            const wp = waypoints[k];
+            const end = role === 'origin' ? origin : dest;
+            if (!wp || !end) return;
+            const ll = wp.marker.getLngLat();
+            const pt = { lng: ll.lng, lat: ll.lat, label: wp.label };
+            const oldLabel = end.label;
+            wp.marker.setLngLat([end.lng, end.lat]);
+            wp.label = end.label;
+            if (role === 'origin') origin = pt; else dest = pt;
 
-            list.innerHTML = waypoints.map((wp, i) => `
-                <div class="wp-item" draggable="true" data-id="${wp.id}" style="--c:${wp.color}"
-                     onmouseenter="_hlWp(${wp.id}, true)" onmouseleave="_hlWp(${wp.id}, false)">
-                    <span class="wp-grip" title="Glisser pour réordonner">⋮⋮</span>
-                    <div class="wp-num">${i + 1}</div>
-                    <div class="wp-label" title="${esc(wp.label)} — cliquer pour centrer la carte"
-                         onclick="focusWaypoint(${wp.id})">${esc(wp.label)}</div>
-                    <div class="wp-arrows">
-                        <button onclick="moveWaypoint(${wp.id},-1)" ${i === 0 ? 'disabled' : ''} title="Monter">▲</button>
-                        <button onclick="moveWaypoint(${wp.id}, 1)" ${i === waypoints.length - 1 ? 'disabled' : ''} title="Descendre">▼</button>
-                    </div>
-                    <span class="wp-remove" onclick="removeWaypoint(${wp.id})" title="Supprimer">✕</span>
-                </div>`).join('');
+            syncMarkers();
+            _bumpPin(role === 'origin' ? originMarker : destMarker);
+            _bumpPin(wp.marker);
+            updateWaypointsList({ flash: [wp.id, role] });
 
-            list.querySelectorAll('.wp-item').forEach(el => {
-                const id = +el.dataset.id;
-                if (changed.has(id)) {
-                    el.classList.add('moved');
-                    el.querySelector('.wp-num').classList.add('bump');
-                }
-                if (!opts.animate) return;
-                const b = before[el.dataset.id];
-                if (b == null) return;
-                const dy = b - el.getBoundingClientRect().top;
-                if (!dy) return;
-                el.style.transition = 'none';
-                el.style.transform = `translateY(${dy}px)`;
-                requestAnimationFrame(() => requestAnimationFrame(() => {
-                    el.style.transition = 'transform .35s var(--ease), box-shadow .15s, background .15s';
-                    el.style.transform = '';
-                }));
+            // Le départ ou l'arrivée change : le prochain tracé devient la référence.
+            forceReference = true;
+            autoCalculate();
+            refreshPanel();
+            const court = l => String(l || '').split(',')[0];
+            toast(role === 'origin'
+                ? `${court(pt.label)} devient le départ, ${court(oldLabel)} l'étape 1`
+                : `${court(pt.label)} devient l'arrivée, ${court(oldLabel)} l'étape ${waypoints.length}`, 'info');
+        }
+
+        function _bumpPin(marker) {
+            if (!marker) return;
+            const pin = marker.getElement().querySelector('.wp-pin-in');
+            if (!pin) return;
+            pin.classList.remove('bump'); void pin.offsetWidth; pin.classList.add('bump');
+        }
+
+        function _flashRow(row) {
+            if (!row) return;
+            row.classList.remove('moved'); void row.offsetWidth; row.classList.add('moved');
+        }
+
+        function _syncEndArrows() {
+            const n = waypoints.length;
+            const mo = document.getElementById('mv-origin'), md = document.getElementById('mv-dest');
+            const t1 = n ? 'Descendre : devient l\'étape 1' : 'Inverser avec l\'arrivée';
+            const t2 = n ? `Remonter : devient l'étape ${n}` : 'Inverser avec le départ';
+            mo.title = t1; mo.setAttribute('aria-label', t1); mo.classList.toggle('off', !origin);
+            md.title = t2; md.setAttribute('aria-label', t2); md.classList.toggle('off', !dest);
+        }
+
+        // Valeur affichée dans les champs des étapes (jamais pendant la frappe).
+        function _syncWpInputs() {
+            waypoints.forEach(wp => {
+                const inp = document.getElementById('in-wp-' + wp.id);
+                if (!inp) return;
+                if (document.activeElement !== inp) inp.value = wp.label;
+                inp.title = wp.label;
             });
         }
 
-        // Glisser-déposer dans la liste
+        // ── Ligne « nouvelle étape » ──
+        function openDraftWaypoint() {
+            if (!origin || !dest) { toast('Posez d\'abord le départ et l\'arrivée', 'info'); return; }
+            draftWp = true;
+            updateWaypointsList();
+            refreshPanel();
+            const inp = _epInput('wp-new');
+            if (inp) inp.focus();
+        }
+
+        function _wpWrap(key) {
+            const w = document.createElement('div');
+            w.className = 'ep-wp';
+            w.dataset.id = key;
+            const role = 'wp-' + key;
+            w.innerHTML = `
+                <div class="ep-row wp" data-id="${key}">
+                    <span class="ep-icon"><span class="ep-num"></span></span>
+                    <div class="ep-input-wrap">
+                        <input id="in-${role}" class="ep-input" type="text" autocomplete="off" spellcheck="false"
+                               placeholder="Ajouter une étape" />
+                        <span class="ep-clear" title="Supprimer l'étape">✕</span>
+                    </div>
+                    <span class="ep-moves">
+                        <button type="button" data-dir="-1">${ARROW_UP}</button>
+                        <button type="button" data-dir="1">${ARROW_DN}</button>
+                    </span>
+                </div>
+                <div class="ep-link"></div>`;
+            const row = w.firstElementChild;
+            _bindEpInput(row.querySelector('input'), role);
+
+            if (key === 'new') {
+                row.querySelector('.ep-num').classList.add('draft');
+                row.querySelector('.ep-moves').style.visibility = 'hidden';
+                row.querySelector('.ep-clear').addEventListener('click', () => {
+                    draftWp = false; closeSuggest(); updateWaypointsList(); refreshPanel();
+                });
+                return w;
+            }
+            const id = +key;
+            row.querySelector('.ep-clear').addEventListener('click', () => removeWaypoint(id));
+            row.querySelectorAll('.ep-moves button').forEach(b =>
+                b.addEventListener('click', () => shiftPoint('wp', +b.dataset.dir, id)));
+            row.addEventListener('mouseenter', () => _hlWp(id, true));
+            row.addEventListener('mouseleave', () => _hlWp(id, false));
+            const icon = row.querySelector('.ep-icon');
+            icon.title = 'Glisser pour réordonner · cliquer pour centrer la carte';
+            icon.addEventListener('click', () => focusWaypoint(id));
+            return w;
+        }
+
+        // Étapes affichées entre le départ et l'arrivée, dans l'ordre du trajet.
+        // Les lignes existantes sont réutilisées (et pas recréées) pour ne pas
+        // perdre le focus ni ce qui est en train d'être tapé.
+        function updateWaypointsList(opts = {}) {
+            const box = document.getElementById('ep-wps');
+            const changed = _syncPinNumbers(!!opts.animate);
+            const n = waypoints.length;
+
+            const before = {};
+            box.querySelectorAll('.ep-wp').forEach(el => { before[el.dataset.id] = el.getBoundingClientRect().top; });
+
+            const keys = waypoints.map(wp => String(wp.id));
+            if (draftWp) keys.push('new');
+            box.querySelectorAll('.ep-wp').forEach(el => { if (!keys.includes(el.dataset.id)) el.remove(); });
+
+            keys.forEach((key, k) => {
+                let w = box.querySelector(`.ep-wp[data-id="${key}"]`);
+                if (!w) w = _wpWrap(key);
+                // On ne déplace un nœud que s'il n'est pas déjà à sa place : déplacer
+                // un champ dans le DOM lui ferait perdre le focus.
+                if (box.children[k] !== w) box.insertBefore(w, box.children[k] || null);
+                if (key === 'new') {
+                    w.querySelector('.ep-num').textContent = '';
+                    w.querySelector('input').setAttribute('aria-label', 'Nouvelle étape');
+                    return;
+                }
+                const wp = waypoints[k];
+                const row = w.firstElementChild;
+                row.style.setProperty('--c', wp.color);
+                const num = row.querySelector('.ep-num');
+                num.textContent = k + 1;
+                num.style.background = wp.color;
+                const inp = row.querySelector('input');
+                inp.setAttribute('aria-label', `Étape ${k + 1}`);
+                inp.placeholder = `Étape ${k + 1}`;
+                if (document.activeElement !== inp) inp.value = wp.label;
+                inp.title = wp.label;
+                const [up, dn] = row.querySelectorAll('.ep-moves button');
+                const tu = k === 0 ? 'En faire le départ' : 'Monter';
+                const td = k === n - 1 ? 'En faire l\'arrivée' : 'Descendre';
+                up.title = tu; up.setAttribute('aria-label', tu);
+                dn.title = td; dn.setAttribute('aria-label', td);
+                if (changed.has(wp.id)) { _flashRow(row); num.classList.remove('bump'); void num.offsetWidth; num.classList.add('bump'); }
+            });
+
+            (opts.flash || []).forEach(f => {
+                if (f === 'origin') _flashRow(document.getElementById('ep-row-origin'));
+                else if (f === 'dest') _flashRow(document.getElementById('ep-row-dest'));
+                else {
+                    const row = box.querySelector(`.ep-row[data-id="${f}"]`);
+                    _flashRow(row);
+                    if (row) { const num = row.querySelector('.ep-num'); num.classList.remove('bump'); void num.offsetWidth; num.classList.add('bump'); }
+                }
+            });
+
+            if (opts.animate) {
+                box.querySelectorAll('.ep-wp').forEach(el => {
+                    const b = before[el.dataset.id];
+                    if (b == null) return;
+                    const dy = b - el.getBoundingClientRect().top;
+                    if (!dy) return;
+                    el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }],
+                               { duration: 350, easing: 'cubic-bezier(.32, .72, 0, 1)' });
+                });
+            }
+
+            const add = document.getElementById('ep-add');
+            if (add) add.classList.toggle('show', !!(origin && dest) && !draftWp);
+            const md = document.getElementById('mv-dest');
+            if (md && document.getElementById('mv-origin')) _syncEndArrows();
+        }
+
+        // Glisser-déposer des étapes par leur pastille numérotée
         (function initWpDrag() {
-            const list = document.getElementById('wp-list');
-            if (!list) return;
+            const box = document.getElementById('ep-wps');
+            if (!box) return;
             let dragId = null;
-            const clearMarks = () => list.querySelectorAll('.drop-before,.drop-after')
+            const clearMarks = () => box.querySelectorAll('.drop-before,.drop-after')
                 .forEach(el => el.classList.remove('drop-before', 'drop-after'));
 
-            list.addEventListener('dragstart', e => {
-                const item = e.target.closest('.wp-item');
-                if (!item) return;
-                dragId = +item.dataset.id;
-                item.classList.add('dragging');
+            // Seule la pastille rend la ligne déplaçable : le champ reste sélectionnable.
+            box.addEventListener('mousedown', e => {
+                const icon = e.target.closest('.ep-row.wp .ep-icon');
+                const w = e.target.closest('.ep-wp');
+                if (icon && w && w.dataset.id !== 'new') w.draggable = true;
+            });
+            document.addEventListener('mouseup', () => {
+                if (dragId === null) box.querySelectorAll('.ep-wp[draggable="true"]').forEach(el => el.draggable = false);
+            });
+
+            box.addEventListener('dragstart', e => {
+                const w = e.target.closest('.ep-wp');
+                if (!w || !w.draggable) return;
+                dragId = +w.dataset.id;
+                w.firstElementChild.classList.add('dragging');
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('text/plain', String(dragId));
             });
-            list.addEventListener('dragover', e => {
+            box.addEventListener('dragover', e => {
                 if (dragId === null) return;
-                const item = e.target.closest('.wp-item');
                 e.preventDefault();
                 clearMarks();
-                if (!item || +item.dataset.id === dragId) return;
-                const r = item.getBoundingClientRect();
-                item.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+                const w = e.target.closest('.ep-wp');
+                if (!w || w.dataset.id === 'new' || +w.dataset.id === dragId) return;
+                const row = w.firstElementChild;
+                const r = row.getBoundingClientRect();
+                row.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
             });
-            list.addEventListener('drop', e => {
+            box.addEventListener('drop', e => {
                 e.preventDefault();
-                const item = list.querySelector('.drop-before, .drop-after');
+                const row = box.querySelector('.drop-before, .drop-after');
                 const from = waypoints.findIndex(w => w.id === dragId);
-                if (item && from !== -1) {
-                    let to = waypoints.findIndex(w => w.id === +item.dataset.id);
-                    if (item.classList.contains('drop-after')) to++;
+                if (row && from !== -1) {
+                    let to = waypoints.findIndex(w => w.id === +row.dataset.id);
+                    if (row.classList.contains('drop-after')) to++;
                     if (to > from) to--;
                     _moveWaypointTo(from, to);
                 }
                 clearMarks();
             });
-            list.addEventListener('dragend', () => {
+            box.addEventListener('dragend', () => {
                 dragId = null;
                 clearMarks();
-                list.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+                box.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+                box.querySelectorAll('.ep-wp').forEach(el => el.draggable = false);
             });
         })();
 
@@ -2760,7 +2981,7 @@
             const hit = searchHits[index];
             if (!hit) return;
             _cancelSearchPin();
-            addWaypoint({ lng: hit.lng, lat: hit.lat }, hitLabel(hit).short);
+            addWaypoint({ lng: hit.lng, lat: hit.lat }, hitLabel(hit).full);
         }
 
         function _cancelSearchPin() {

@@ -109,7 +109,7 @@ st.markdown('<div class="ap-section">Dans la carte</div>', unsafe_allow_html=Tru
 st.markdown(
     '<ul class="ap-list">'
     '<li><b>Départ et arrivée</b> <span>: tapez une adresse ou des coordonnées, ou cliquez sur la carte.</span></li>'
-    '<li><b>Étapes</b> <span>: clic droit sur la carte, ou recherche d’adresse en bas du panneau.</span></li>'
+    '<li><b>Étapes</b> <span>: entre le départ et l’arrivée — « Ajouter une étape », clic droit sur la carte ou recherche d’adresse. Les flèches au survol changent l’ordre ; une étape peut devenir le départ ou l’arrivée.</span></li>'
     '<li><b>Distance et péage</b> <span>: un clic sur la case affiche le détail par pays.</span></li>'
     '<li><b>Traversées</b> <span>: choisissez la ligne de ferry ou de navette dans le bloc dédié.</span></li>'
     '<li><b>Plan ou Satellite</b> <span>: dans la barre en bas de la carte, avec les types de routes et les restrictions PL.</span></li>'
