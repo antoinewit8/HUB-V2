@@ -683,7 +683,7 @@
         </div>
         <span class="lp-sep"></span>
         <button class="toggle-btn" id="toggle-adm"
-                title="Départements français, provinces belges et frontière luxembourgeoise">
+                title="Départements français et provinces belges">
             <span class="toggle-dot dot-adm"></span>
             Départements
         </button>
@@ -733,7 +733,7 @@
         const initOriginName = {{ (route.origin or '') | tojson }};
         const initDestName   = {{ (route.dest   or '') | tojson }};
 
-        // Limites administratives (départements FR, provinces BE, contour LU),
+        // Limites administratives (départements FR, provinces BE),
         // injectées par Streamlit depuis assets/limites_admin.geojson.
         const LIMITES_ADMIN = {{ limites_admin | default('null', true) }};
 
@@ -3401,19 +3401,17 @@
         })();
 
         // ═══════════════════════════════════════════════════════
-        //  LIMITES ADMINISTRATIVES : DÉPARTEMENTS / PROVINCES / LUXEMBOURG
+        //  LIMITES ADMINISTRATIVES : DÉPARTEMENTS FR / PROVINCES BE
         //  Trait fin en pointillés, sous les libellés du fond : visible sans
         //  concurrencer le tracé. Numéro du département (nom de la province
         //  en Belgique) à partir du zoom 6,5. Couleurs adaptées à chaque fond.
-        //  Le contour du Luxembourg (Natural Earth, moins précis que le fond)
-        //  s'efface au-delà du zoom 9, où le fond dessine déjà la frontière.
         //  Enregistré après le bloc « fond de carte » : ses couches existent.
         // ═══════════════════════════════════════════════════════
         (function () {
             const btn = document.getElementById('toggle-adm');
             if (!LIMITES_ADMIN || !LIMITES_ADMIN.features) { btn.style.display = 'none'; return; }
 
-            const IDS = ['adm-lines', 'adm-pays', 'adm-labels'];
+            const IDS = ['adm-lines', 'adm-labels'];
             const TEINTES = {
                 plan:      { line: '#4a5d75', text: '#4a5d75', halo: 'rgba(255,255,255,.9)', o: 1 },
                 toner:     { line: '#3a3a3a', text: '#3a3a3a', halo: 'rgba(255,255,255,.9)', o: 1 },
@@ -3458,9 +3456,6 @@
                 map.setPaintProperty('adm-lines', 'line-color', t.line);
                 map.setPaintProperty('adm-lines', 'line-opacity',
                     ['interpolate', ['linear'], ['zoom'], 4, 0.38 * k, 7, 0.50 * k, 10, 0.62 * k]);
-                map.setPaintProperty('adm-pays', 'line-color', t.line);
-                map.setPaintProperty('adm-pays', 'line-opacity',
-                    ['interpolate', ['linear'], ['zoom'], 4, 0.45 * k, 7, 0.60 * k, 8.5, 0.60 * k, 10, 0]);
                 map.setPaintProperty('adm-labels', 'text-color', t.text);
                 map.setPaintProperty('adm-labels', 'text-halo-color', t.halo);
             }
@@ -3474,22 +3469,12 @@
                 map.addSource('adm', { type: 'geojson', data: LIMITES_ADMIN, tolerance: 0.5 });
                 map.addLayer({
                     id: 'adm-lines', type: 'line', source: 'adm',
-                    filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'k'], 'pays']],
+                    filter: ['==', ['geometry-type'], 'LineString'],
                     layout: { 'line-join': 'round', 'line-cap': 'round' },
                     paint: {
                         'line-color': '#4a5d75',
                         'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.5, 7, 0.9, 10, 1.4, 13, 2],
                         'line-dasharray': [3, 2.5]
-                    }
-                }, 'originalRouteLayer');
-                map.addLayer({
-                    id: 'adm-pays', type: 'line', source: 'adm',
-                    filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'k'], 'pays']],
-                    layout: { 'line-join': 'round', 'line-cap': 'round' },
-                    paint: {
-                        'line-color': '#4a5d75',
-                        'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.9, 7, 1.4, 10, 2, 13, 2.6],
-                        'line-dasharray': [4, 2]
                     }
                 }, 'originalRouteLayer');
                 map.addLayer({

@@ -68,7 +68,7 @@ document.getElementById('ouvrir').addEventListener('click', () => {{
 
 
 def _limites_admin() -> str:
-    """Départements FR, provinces BE et contour LU (GeoJSON compact, ~400 Ko).
+    """Départements FR et provinces BE (GeoJSON compact, ~400 Ko).
     Injecté tel quel dans map.html : la carte est ouverte depuis un blob,
     elle ne peut pas charger de fichier relatif. "null" si le fichier manque."""
     p = Path(__file__).parent.parent / "assets" / "limites_admin.geojson"
