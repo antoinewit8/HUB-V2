@@ -683,7 +683,7 @@
         </div>
         <span class="lp-sep"></span>
         <button class="toggle-btn" id="toggle-adm"
-                title="Départements français et provinces belges">
+                title="Limites et numéros des départements français">
             <span class="toggle-dot dot-adm"></span>
             Départements
         </button>
@@ -733,7 +733,7 @@
         const initOriginName = {{ (route.origin or '') | tojson }};
         const initDestName   = {{ (route.dest   or '') | tojson }};
 
-        // Limites administratives (départements FR, provinces BE),
+        // Limites des départements français,
         // injectées par Streamlit depuis assets/limites_admin.geojson.
         const LIMITES_ADMIN = {{ limites_admin | default('null', true) }};
 
@@ -3401,11 +3401,11 @@
         })();
 
         // ═══════════════════════════════════════════════════════
-        //  LIMITES ADMINISTRATIVES : DÉPARTEMENTS FR / PROVINCES BE
+        //  LIMITES ADMINISTRATIVES : DÉPARTEMENTS FRANÇAIS
         //  Trait en pointillés serrés posé sur un liseré clair (lisible sur
         //  n'importe quel fond), sous les libellés du fond. Numéro du
-        //  département (nom de la province en Belgique) au-dessus des libellés
-        //  du fond, à partir du zoom 5,5. Couleurs adaptées à chaque fond.
+        //  département au-dessus des libellés du fond, à partir du zoom 5,5.
+        //  Couleurs adaptées à chaque fond.
         //  Enregistré après le bloc « fond de carte » : ses couches existent.
         // ═══════════════════════════════════════════════════════
         (function () {
@@ -3497,10 +3497,7 @@
                     layout: {
                         'text-field': ['get', 't'],
                         'text-font': [police],
-                        'text-size': ['interpolate', ['linear'], ['zoom'],
-                                      5.5, ['case', ['==', ['get', 'k'], 'prov'], 10, 12],
-                                      8,   ['case', ['==', ['get', 'k'], 'prov'], 13, 16],
-                                      10,  ['case', ['==', ['get', 'k'], 'prov'], 15, 20]],
+                        'text-size': ['interpolate', ['linear'], ['zoom'], 5.5, 12, 8, 16, 10, 20],
                         'text-letter-spacing': 0.04,
                         'text-padding': 2
                     },
