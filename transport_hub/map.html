@@ -481,6 +481,8 @@
         .toggle-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px #fff, 0 0 0 2.5px rgba(0,0,0,.1); }
         .dot-road { background: var(--blue); }
         .dot-pl   { background: var(--red); }
+        .toggle-btn.active-adm  { background: #eef1f5; color: #3d4f66; box-shadow: inset 0 0 0 1.5px rgba(74,93,117,.30); }
+        .dot-adm  { background: #fff; box-shadow: 0 0 0 1.5px #6b7c93; border: 1.5px dashed #6b7c93; box-sizing: border-box; }
         .toggle-btn .badge-loading { font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums; }
 
 
@@ -680,6 +682,11 @@
             <button data-fond="toner">Toner</button>
         </div>
         <span class="lp-sep"></span>
+        <button class="toggle-btn" id="toggle-adm"
+                title="Départements français, provinces belges et frontière luxembourgeoise">
+            <span class="toggle-dot dot-adm"></span>
+            Départements
+        </button>
         <button class="toggle-btn" id="toggle-road" onclick="toggleLayer('road')"
                 title="Colorier autoroutes / nationales / départementales">
             <span class="toggle-dot dot-road"></span>
@@ -725,6 +732,10 @@
         const initPolyline = {{ (route.polyline_current or route.polyline or []) | default([], true) | tojson }};
         const initOriginName = {{ (route.origin or '') | tojson }};
         const initDestName   = {{ (route.dest   or '') | tojson }};
+
+        // Limites administratives (départements FR, provinces BE, contour LU),
+        // injectées par Streamlit depuis assets/limites_admin.geojson.
+        const LIMITES_ADMIN = {{ limites_admin | default('null', true) }};
 
         // La carte s'ouvre vide par défaut. Si Streamlit fournit un tracé, on l'affiche.
         const hasInitialRoute = Array.isArray(initPolyline) && initPolyline.length > 1;
@@ -3387,6 +3398,132 @@
             });
 
             majBoutons();
+        })();
+
+        // ═══════════════════════════════════════════════════════
+        //  LIMITES ADMINISTRATIVES : DÉPARTEMENTS / PROVINCES / LUXEMBOURG
+        //  Trait fin en pointillés, sous les libellés du fond : visible sans
+        //  concurrencer le tracé. Numéro du département (nom de la province
+        //  en Belgique) à partir du zoom 6,5. Couleurs adaptées à chaque fond.
+        //  Le contour du Luxembourg (Natural Earth, moins précis que le fond)
+        //  s'efface au-delà du zoom 9, où le fond dessine déjà la frontière.
+        //  Enregistré après le bloc « fond de carte » : ses couches existent.
+        // ═══════════════════════════════════════════════════════
+        (function () {
+            const btn = document.getElementById('toggle-adm');
+            if (!LIMITES_ADMIN || !LIMITES_ADMIN.features) { btn.style.display = 'none'; return; }
+
+            const IDS = ['adm-lines', 'adm-pays', 'adm-labels'];
+            const TEINTES = {
+                plan:      { line: '#4a5d75', text: '#4a5d75', halo: 'rgba(255,255,255,.9)', o: 1 },
+                toner:     { line: '#3a3a3a', text: '#3a3a3a', halo: 'rgba(255,255,255,.9)', o: 1 },
+                satellite: { line: '#ffffff', text: '#ffffff', halo: 'rgba(0,0,0,.55)',     o: 1.25 }
+            };
+
+            let actif = true;
+            try { actif = localStorage.getItem('cb-carte-limites') !== '0'; } catch (e) { }
+            let pret = false;
+
+            const fondActuel = () => {
+                const b = document.querySelector('#fond-seg button.on');
+                return (b && TEINTES[b.dataset.fond]) ? b.dataset.fond : 'plan';
+            };
+
+            // Sous les libellés du fond affiché : les noms de villes restent lisibles
+            // et passent en priorité sur nos numéros.
+            function ancre(fond) {
+                const layers = map.getStyle().layers;
+                const stop = layers.findIndex(l => l.id === 'originalRouteLayer');
+                const sous = layers.slice(0, stop < 0 ? layers.length : stop);
+                let l;
+                if (fond === 'satellite') return map.getLayer('sat-ref') ? 'sat-ref' : 'originalRouteLayer';
+                if (fond === 'toner') l = sous.find(x => x.id.startsWith('tn-') && x.type === 'symbol');
+                else                  l = sous.find(x => !x.id.startsWith('tn-') && !x.id.startsWith('sat-')
+                                                        && !x.id.startsWith('adm-') && x.type === 'symbol');
+                return l ? l.id : 'originalRouteLayer';
+            }
+
+            function appliquer() {
+                btn.classList.toggle('active-adm', actif);
+                if (!pret) return;
+                const fond = fondActuel();
+                const t = TEINTES[fond];
+                const avant = ancre(fond);
+                IDS.forEach(id => {
+                    if (!map.getLayer(id)) return;
+                    if (avant !== id) map.moveLayer(id, avant);
+                    map.setLayoutProperty(id, 'visibility', actif ? 'visible' : 'none');
+                });
+                const k = t.o;
+                map.setPaintProperty('adm-lines', 'line-color', t.line);
+                map.setPaintProperty('adm-lines', 'line-opacity',
+                    ['interpolate', ['linear'], ['zoom'], 4, 0.38 * k, 7, 0.50 * k, 10, 0.62 * k]);
+                map.setPaintProperty('adm-pays', 'line-color', t.line);
+                map.setPaintProperty('adm-pays', 'line-opacity',
+                    ['interpolate', ['linear'], ['zoom'], 4, 0.45 * k, 7, 0.60 * k, 8.5, 0.60 * k, 10, 0]);
+                map.setPaintProperty('adm-labels', 'text-color', t.text);
+                map.setPaintProperty('adm-labels', 'text-halo-color', t.halo);
+            }
+
+            map.on('load', () => {
+                // Même police que le fond (une carte n'a qu'une source de polices).
+                const polices = map.getStyle().layers
+                    .map(l => (l.layout || {})['text-font']).filter(Array.isArray).flat();
+                const police = polices.find(f => /regular/i.test(f)) || polices[0] || 'Noto Sans Regular';
+
+                map.addSource('adm', { type: 'geojson', data: LIMITES_ADMIN, tolerance: 0.5 });
+                map.addLayer({
+                    id: 'adm-lines', type: 'line', source: 'adm',
+                    filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'k'], 'pays']],
+                    layout: { 'line-join': 'round', 'line-cap': 'round' },
+                    paint: {
+                        'line-color': '#4a5d75',
+                        'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.5, 7, 0.9, 10, 1.4, 13, 2],
+                        'line-dasharray': [3, 2.5]
+                    }
+                }, 'originalRouteLayer');
+                map.addLayer({
+                    id: 'adm-pays', type: 'line', source: 'adm',
+                    filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'k'], 'pays']],
+                    layout: { 'line-join': 'round', 'line-cap': 'round' },
+                    paint: {
+                        'line-color': '#4a5d75',
+                        'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.9, 7, 1.4, 10, 2, 13, 2.6],
+                        'line-dasharray': [4, 2]
+                    }
+                }, 'originalRouteLayer');
+                map.addLayer({
+                    id: 'adm-labels', type: 'symbol', source: 'adm', minzoom: 6.5,
+                    filter: ['==', ['geometry-type'], 'Point'],
+                    layout: {
+                        'text-field': ['get', 't'],
+                        'text-font': [police],
+                        'text-size': ['interpolate', ['linear'], ['zoom'], 6.5,
+                                      ['case', ['==', ['get', 'k'], 'prov'], 11, 13], 10,
+                                      ['case', ['==', ['get', 'k'], 'prov'], 13, 17]],
+                        'text-letter-spacing': 0.06,
+                        'text-padding': 4
+                    },
+                    paint: { 'text-color': '#4a5d75', 'text-opacity': 0.85,
+                             'text-halo-color': '#fff', 'text-halo-width': 1.2, 'text-halo-blur': 0.4 }
+                }, 'originalRouteLayer');
+
+                pret = true;
+                appliquer();
+            });
+
+            // Après le changement de fond (écouteur posé après celui du bloc fond).
+            document.getElementById('fond-seg').addEventListener('click', e => {
+                if (e.target.closest('button[data-fond]')) appliquer();
+            });
+
+            btn.addEventListener('click', () => {
+                actif = !actif;
+                try { localStorage.setItem('cb-carte-limites', actif ? '1' : '0'); } catch (e) { }
+                appliquer();
+            });
+
+            appliquer();
         })();
     </script>
 </body>

@@ -67,6 +67,17 @@ document.getElementById('ouvrir').addEventListener('click', () => {{
 """, height=90)
 
 
+def _limites_admin() -> str:
+    """Départements FR, provinces BE et contour LU (GeoJSON compact, ~400 Ko).
+    Injecté tel quel dans map.html : la carte est ouverte depuis un blob,
+    elle ne peut pas charger de fichier relatif. "null" si le fichier manque."""
+    p = Path(__file__).parent.parent / "assets" / "limites_admin.geojson"
+    try:
+        return p.read_text(encoding="utf-8")
+    except OSError:
+        return "null"
+
+
 # ─── Page ────────────────────────────────────────────────────────────────────
 ui.page("carte_manuelle", "Itinéraires poids lourds, péages et kilomètres par pays, traversées. La carte s’ouvre en plein écran dans un nouvel onglet.")
 
@@ -81,6 +92,7 @@ try:
         route={"origin": "", "dest": "", "polyline": []},
         route_id="manual",
         server_url=MAP_SERVER_URL,
+        limites_admin=_limites_admin(),
     )
 except FileNotFoundError:
     st.error("map.html introuvable à la racine du projet.")
