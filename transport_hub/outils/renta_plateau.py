@@ -30,6 +30,7 @@ Logique :
 
 import heapq
 import io
+import json
 import math
 import os
 import re
@@ -39,6 +40,7 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -57,7 +59,7 @@ MAX_RETRIES  = 3
 RETRY_DELAY  = 2
 VEHICLE      = "EUR_TRAILER_TRUCK"
 
-RESULT_SCHEMA      = "plateau-v1"   # change → les résultats en session sont purgés
+RESULT_SCHEMA      = "plateau-v2"   # change → les résultats en session sont purgés
 SEUIL_ALERTE_VIDE  = 150            # km — trajet à vide signalé au-delà
 SEUIL_ECART_ODO    = 15             # % — écart compteur / PTV signalé au-delà (par camion)
 SEUIL_TEMPS_SITE   = 4.0            # h — temps sur site signalé au-delà
@@ -584,6 +586,13 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
         realise=("realise", "all"),
     ).reset_index()
     dt = dt.merge(info, on=["tracteur", "dossier"], how="left")
+    # Chargement / déchargement hors période : on affiche l'origine / la destination du dossier (avec *)
+    orig = stops.groupby("dossier")["ville_orig"].first()
+    dest = stops.groupby("dossier")["ville_dest"].first()
+    vide_ch = dt["chargement"].fillna("") == ""
+    dt.loc[vide_ch, "chargement"] = dt.loc[vide_ch, "dossier"].map(orig).fillna("").map(lambda v: f"{v} *" if v else "")
+    vide_de = dt["dechargement"].fillna("") == ""
+    dt.loc[vide_de, "dechargement"] = dt.loc[vide_de, "dossier"].map(dest).fillna("").map(lambda v: f"{v} *" if v else "")
     dt["client"] = np.where(dt["client"] != "", dt["client"], dt["client_planning"])
     groupes = set()
     for t in trajets:
@@ -729,43 +738,378 @@ def _fmt_km(v):
     return "—" if v is None or pd.isna(v) else f"{v:,.0f}".replace(",", " ")
 
 
-def _carte(tj: pd.DataFrame, stops_tr: pd.DataFrame):
-    import pydeck as pdk
-    d = tj.dropna(subset=["lat_de", "lat_a"]).copy()
-    if d.empty:
-        st.info("Aucun trajet géocodé à afficher.")
-        return
-    couleurs = {"Chargé": [0, 113, 227], "À vide": [142, 142, 147], "Groupage": [255, 149, 0],
-                "Reconstitué": [175, 82, 222]}
-    d["color"] = d["type"].map(lambda t: couleurs.get(t, [0, 0, 0]))
-    d["path"] = d.apply(lambda r: [[r.lon_de, r.lat_de], [r.lon_a, r.lat_a]], axis=1)
-    d["label"] = d.apply(lambda r: f"{r.de[0]} → {r.a[0]} · {r.type} · "
-                                   f"{'' if pd.isna(r.km) else f'{r.km:.0f} km'}", axis=1)
-    pts = pd.concat([d[["lat_de", "lon_de"]].set_axis(["lat", "lon"], axis=1),
-                     d[["lat_a", "lon_a"]].set_axis(["lat", "lon"], axis=1)]).drop_duplicates()
-    deck = pdk.Deck(
-        layers=[
-            pdk.Layer("PathLayer", data=d[["path", "color", "label"]], get_path="path", get_color="color",
-                      width_min_pixels=3, pickable=True),
-            pdk.Layer("ScatterplotLayer", data=pts, get_position="[lon, lat]", get_radius=4500,
-                      radius_min_pixels=4, get_fill_color=[29, 29, 31], pickable=False),
-        ],
-        initial_view_state=pdk.ViewState(latitude=float(pts["lat"].mean()), longitude=float(pts["lon"].mean()),
-                                         zoom=5, pitch=0),
-        tooltip={"text": "{label}"},
-        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+def _js(v):
+    """Valeur → JSON (NaN / NaT → null, Timestamp → 'JJ/MM HH:MM')."""
+    if v is None:
+        return None
+    if isinstance(v, (pd.Timestamp,)):
+        return None if pd.isna(v) else v.strftime("%d/%m %H:%M")
+    if isinstance(v, (float, np.floating)):
+        return None if np.isnan(v) else round(float(v), 3)
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.bool_, bool)):
+        return bool(v)
+    if isinstance(v, (tuple, list)):
+        return [_js(x) for x in v]
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return v
+
+
+def _records(df, cols):
+    if df is None or df.empty:
+        return []
+    return [{c: _js(r.get(c)) for c in cols} for r in df.to_dict("records")]
+
+
+def construire_tableau_de_bord(df_flotte, df_dos, df_traj, df_ctrl, stops, meta: dict) -> str:
+    """Page HTML autonome (style hub) : vue d'ensemble, camion, dossiers, contrôles."""
+    trajets = {}
+    if not df_traj.empty:
+        for r in df_traj.sort_values(["tracteur", "ordre"]).to_dict("records"):
+            trajets.setdefault(r["tracteur"], []).append(dict(
+                o=_js(r["ordre"]), t=r["type"], km=_js(r["km"]), cpt=_js(r["km_compteur"]),
+                dn=r["de_nom"], dv=r["de"][0], dp=r["de"][2], da=r["de_act"],
+                an=r["a_nom"], av=r["a"][0], ap=r["a"][2], aa=r["a_act"],
+                bord=list(r["a_bord"]), arr=_js(r["a_ts"]),
+                la=_js(r["lat_de"]), lo=_js(r["lon_de"]), lb=_js(r["lat_a"]), lob=_js(r["lon_a"]),
+                grp=bool(r.get("releve_groupe", False))))
+    arrets = {}
+    for r in stops.sort_values(["tracteur", "ordre"]).to_dict("records"):
+        site = None
+        if pd.notna(r["ts_arr"]) and pd.notna(r["ts_dep"]):
+            site = round((r["ts_dep"] - r["ts_arr"]).total_seconds() / 3600, 1)
+        arrets.setdefault(r["tracteur"], []).append(dict(
+            o=_js(r["ordre"]), d=r["dossier"], act=r["activite"], nom=r["nom"], v=r["ville"], p=r["pays"],
+            cp=r["cp"], prevu=_js(r["ts_plan"]), arr=_js(r["ts_arr"]), dep=_js(r["ts_dep"]), site=site,
+            odo=_js(r["odo_km"]), ch=r["chauffeur"], pl=r["plateau"], real=bool(r["realise"])))
+    payload = dict(
+        meta=meta,
+        flotte=_records(df_flotte, list(COLS_FLOTTE) + ["km_groupage", "debut", "fin", "arrets"]),
+        dossiers=_records(df_dos, list(COLS_DOSSIERS) + ["ca_trouve", "date_debut"]),
+        controles=_records(df_ctrl, list(COLS_CTRL)),
+        trajets=trajets, arrets=arrets,
+        seuils=dict(vide=SEUIL_ALERTE_VIDE, site=SEUIL_TEMPS_SITE, odo=SEUIL_ECART_ODO),
     )
-    st.pydeck_chart(deck, use_container_width=True, height=460)
-    st.caption("Tracé à vol d'oiseau entre arrêts · bleu chargé · gris à vide · orange groupage · "
-               "violet reconstitué. Les km affichés sont les km routiers PTV.")
+    data = json.dumps(payload, ensure_ascii=False, default=str).replace("</", "<\\/")
+    return DASH_HTML.replace("__DATA__", data, 1)
 
 
-def _legende_types():
-    st.markdown(
-        f'<div class="ap-note"><b>Chargé</b> un dossier à bord · <b>À vide</b> rien à bord, imputé selon la '
-        f'convention choisie · <b>Groupage</b> plusieurs dossiers à bord, km partagés à parts égales '
-        f'(provisoire) · <b>Reconstitué</b> chargement ou déchargement hors période, recalculé depuis '
-        f'Origine / Destination du dossier.</div>', unsafe_allow_html=True)
+def bouton_plein_ecran(page_html: str):
+    contenu = json.dumps(page_html).replace("</", "<\\/")
+    components.html(f"""
+<style>
+  body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif; }}
+  button {{ height: 42px; padding: 0 22px; border: none; border-radius: 980px; background: #e8e8ed; color: #0071e3;
+           font: 500 15px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif;
+           cursor: pointer; }}
+  button:hover {{ background: #dedee3; }}
+  span {{ margin-left: 10px; font-size: 13px; color: #6e6e73; }}
+</style>
+<button id="b">Ouvrir en plein écran</button><span id="m"></span>
+<script>
+const PAGE = {contenu};
+document.getElementById('b').onclick = () => {{
+  const w = window.open(URL.createObjectURL(new Blob([PAGE], {{type: 'text/html'}})), '_blank');
+  if (!w) document.getElementById('m').textContent = 'Pop-up bloquée : autorisez-les pour le HUB.';
+}};
+</script>""", height=50)
+
+
+DASH_HTML = r"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rentabilité plateau</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{--bg:#f5f5f7;--card:#fff;--text:#1d1d1f;--sub:#6e6e73;--line:#d2d2d7;--hair:#e5e5ea;--soft:#e8e8ed;
+--blue:#0071e3;--green:#248a3d;--green-bg:#e3f5e8;--orange:#c93400;--orange-bg:#fff1e6;--red:#d70015;--red-bg:#fde8ea;
+--c-ch:#0071e3;--c-vide:#a1a1a6;--c-grp:#ff9500;--c-rec:#af52de;
+--shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06);
+--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Inter","Helvetica Neue",Arial,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased;font-size:14px}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 20px 40px}
+.head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.head h1{font-size:28px;font-weight:700;letter-spacing:-.02em;margin:0}
+.head .meta{color:var(--sub);font-size:13px;margin-top:4px}
+.seg{display:inline-flex;background:var(--soft);border-radius:10px;padding:2px}
+.seg button{border:0;background:transparent;font:500 13px var(--font);color:var(--text);padding:7px 14px;border-radius:8px;cursor:pointer}
+.seg button.on{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:18px}
+.kpi{background:var(--card);border-radius:16px;padding:14px 16px;box-shadow:var(--shadow)}
+.kpi .l{font-size:12px;color:var(--sub);font-weight:500}
+.kpi .v{font-size:24px;font-weight:600;letter-spacing:-.02em;margin-top:4px;white-space:nowrap}
+.kpi .s{font-size:12px;color:var(--sub);margin-top:2px}
+.card{background:var(--card);border-radius:18px;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:16px}
+.card h2{font-size:17px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em}
+.card .hint{font-size:12.5px;color:var(--sub);margin:0 0 14px}
+.row-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--sub);flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+/* Classement */
+.rank{display:grid;grid-template-columns:28px minmax(150px,1.3fr) 92px minmax(180px,2fr) 96px 64px 90px;align-items:center;
+  gap:12px;padding:11px 8px;border-top:.5px solid var(--hair);cursor:pointer;border-radius:10px}
+.rank:hover{background:#f7f7f9}
+.rank.h{cursor:default;border-top:0;font-size:11.5px;color:var(--sub);font-weight:500;padding-top:0}
+.rank.h:hover{background:none}
+.rank .n{color:var(--sub);font-variant-numeric:tabular-nums;text-align:right}
+.rank .tr b{display:block;font-weight:600}.rank .tr span{font-size:12px;color:var(--sub)}
+.renta{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.up{color:var(--green)}.down{color:var(--orange)}
+.bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--soft)}
+.bar i{display:block;height:100%}
+.barlbl{font-size:11.5px;color:var(--sub);margin-top:4px;font-variant-numeric:tabular-nums}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.badges{display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap}
+.b{display:inline-block;font-size:11px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap}
+.b.o{background:var(--orange-bg);color:var(--orange)}.b.r{background:var(--red-bg);color:var(--red)}
+.b.g{background:var(--green-bg);color:var(--green)}.b.n{background:var(--soft);color:var(--sub)}
+.b.p{background:#f4ebfb;color:#8944ab}
+/* Clients */
+.cli{display:grid;grid-template-columns:minmax(140px,1fr) 2fr 90px 70px;gap:12px;align-items:center;padding:8px 0;border-top:.5px solid var(--hair)}
+.cli:first-of-type{border-top:0}
+/* Camion */
+.trk-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+select,input[type=search]{font:14px var(--font);padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--text)}
+.nav{border:0;background:var(--soft);color:var(--blue);width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer}
+.nav:hover{background:#dedee3}
+.split{display:grid;grid-template-columns:1.15fr 1fr;gap:16px}
+#map{height:560px;border-radius:14px;overflow:hidden;background:#eef0f3}
+.tl{max-height:560px;overflow:auto;padding-right:6px}
+.stop{display:grid;grid-template-columns:46px 1fr auto;gap:10px;align-items:start;padding:6px 0}
+.stop .act{font-size:11px;font-weight:700;color:#fff;border-radius:7px;text-align:center;padding:4px 0;margin-top:2px}
+.act.CH{background:var(--green)}.act.DECH{background:var(--blue)}
+.stop .pl b{font-weight:600}.stop .pl div{font-size:12px;color:var(--sub);margin-top:1px}
+.stop .tm{text-align:right;font-size:12px;color:var(--sub);white-space:nowrap;font-variant-numeric:tabular-nums}
+.stop.prev{opacity:.55}
+.leg{display:grid;grid-template-columns:46px 1fr;gap:10px;align-items:center;min-height:30px}
+.leg .ln{justify-self:center;width:3px;height:100%;min-height:30px;border-radius:2px}
+.leg .lt{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+.leg .lt b{color:var(--text);font-weight:600}
+/* Tables */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--sub);font-size:12px;padding:8px 8px;border-bottom:.5px solid var(--line);
+  cursor:pointer;white-space:nowrap;user-select:none;position:sticky;top:0;background:#fff}
+th.r,td.r{text-align:right}
+td{padding:9px 8px;border-bottom:.5px solid var(--hair);font-variant-numeric:tabular-nums;vertical-align:top}
+tr:hover td{background:#fafafc}
+.tablewrap{max-height:620px;overflow:auto}
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.ctrl-grp{margin-bottom:14px}
+.ctrl-grp h3{font-size:14px;font-weight:600;margin:0 0 6px;display:flex;align-items:center;gap:8px}
+.ctrl-item{display:grid;grid-template-columns:110px 100px 1fr;gap:10px;font-size:13px;padding:7px 0;border-top:.5px solid var(--hair)}
+.ctrl-item span{color:var(--sub)}
+.empty{color:var(--sub);padding:20px 0;text-align:center}
+.hide{display:none}
+@media(max-width:900px){.kpis{grid-template-columns:repeat(3,1fr)}.split{grid-template-columns:1fr}
+ .rank{grid-template-columns:1fr 80px 90px}.rank>:nth-child(1),.rank>:nth-child(4),.rank>:nth-child(6),.rank>:nth-child(7){display:none}}
+</style></head><body><div class="wrap">
+<div class="head"><div><h1>Rentabilité plateau</h1><div class="meta" id="meta"></div></div>
+<div class="seg" id="tabs"><button data-t="vue" class="on">Vue d'ensemble</button><button data-t="cam">Camion</button>
+<button data-t="dos">Dossiers</button><button data-t="ctl">Contrôles</button></div></div>
+
+<section id="t-vue">
+ <div class="kpis" id="kpis"></div>
+ <div class="card">
+  <div class="row-head"><div><h2>Classement des camions</h2>
+   <p class="hint" style="margin:0">Renta comparée à la moyenne de la flotte · cliquez sur un camion pour voir sa tournée.</p></div>
+   <div class="seg" id="sort"><button data-s="renta" class="on">Renta</button><button data-s="ca">CA</button>
+   <button data-s="km_total">KM</button><button data-s="pct_vide">% vide</button></div></div>
+  <div class="legend" style="margin-bottom:6px"><span><i style="background:var(--c-ch)"></i>Chargé</span>
+   <span><i style="background:var(--c-grp)"></i>Groupage</span><span><i style="background:var(--c-vide)"></i>À vide</span></div>
+  <div id="rank"></div>
+ </div>
+ <div class="card"><h2>Par client</h2><p class="hint">CA et renta des dossiers de la période, km imputés compris · les dossiers sans CA sont exclus de la renta.</p><div id="clients"></div></div>
+</section>
+
+<section id="t-cam" class="hide">
+ <div class="trk-top"><button class="nav" id="prv">‹</button><select id="trsel"></select><button class="nav" id="nxt">›</button>
+  <span id="trinfo" style="color:var(--sub);font-size:13px"></span></div>
+ <div class="kpis" id="tkpis"></div>
+ <div class="split">
+  <div class="card" style="padding:12px"><div id="map"></div>
+   <div class="legend" style="margin:10px 4px 0"><span><i style="background:var(--c-ch)"></i>Chargé</span>
+   <span><i style="background:var(--c-grp)"></i>Groupage</span><span><i style="background:var(--c-vide)"></i>À vide</span>
+   <span><i style="background:var(--c-rec)"></i>Reconstitué</span><span>Tracés à vol d'oiseau · km PTV</span></div></div>
+  <div class="card"><h2>Tournée</h2><p class="hint">Arrêts dans l'ordre, trajets entre deux arrêts, temps sur site.</p><div class="tl" id="tl"></div></div>
+ </div>
+ <div class="card"><h2>Dossiers du camion</h2><div class="tablewrap" id="tdos"></div></div>
+</section>
+
+<section id="t-dos" class="hide">
+ <div class="card"><div class="row-head"><h2>Dossiers</h2><div class="filters">
+  <input type="search" id="q" placeholder="Dossier, client, ville…"><select id="fcli"><option value="">Tous les clients</option></select>
+  <select id="ftr"><option value="">Tous les camions</option></select></div></div>
+  <div class="tablewrap" id="dos"></div><div class="meta" id="dosfoot" style="margin-top:10px;color:var(--sub);font-size:12.5px"></div></div>
+</section>
+
+<section id="t-ctl" class="hide"><div class="card"><h2>Contrôles</h2><p class="hint">Points à vérifier avant d'exploiter les chiffres.</p><div id="ctl"></div></div></section>
+</div>
+<script>
+const D = __DATA__;
+const nf0 = new Intl.NumberFormat('fr-FR',{maximumFractionDigits:0}), nf1 = new Intl.NumberFormat('fr-FR',{minimumFractionDigits:1,maximumFractionDigits:1}),
+      nf3 = new Intl.NumberFormat('fr-FR',{minimumFractionDigits:3,maximumFractionDigits:3});
+const eur = v => v==null?'—':nf0.format(v)+' €', km = v => v==null?'—':nf0.format(v), r3 = v => v==null?'—':nf3.format(v),
+      pct = v => v==null?'—':nf1.format(v)+' %', esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const F = D.flotte, sum = (a,k) => a.reduce((s,x)=>s+(x[k]||0),0);
+const CA = sum(F,'ca'), KM = sum(F,'km_total'), KV = sum(F,'km_vide'), MOY = KM? CA/KM : null;
+const cmp = v => (v==null||MOY==null||F.length<2||Math.abs(v-MOY)<0.0005)?'':(v>MOY?'up':'down');
+const COL = {'Chargé':'#0071e3','À vide':'#a1a1a6','Groupage':'#ff9500','Reconstitué':'#af52de'};
+
+document.getElementById('meta').textContent = [D.meta.periode, D.meta.convention, 'calculé le '+D.meta.genere].filter(Boolean).join(' · ');
+
+function kpiHTML(items){ return items.map(([l,v,s])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`).join(''); }
+const jours = sum(F,'jours'), sansCA = sum(F,'sans_ca'), ndos = D.dossiers.length;
+document.getElementById('kpis').innerHTML = kpiHTML([
+ ['Chiffre d\'affaires', eur(CA), `${F.length} camion${F.length>1?'s':''}`],
+ ['Renta', r3(MOY), '€ par km parcouru'],
+ ['Kilomètres', km(KM), `${km(KM-KV)} chargés`],
+ ['À vide', pct(KM?KV/KM*100:null), `${km(KV)} km`],
+ ['CA par jour', eur(jours?CA/jours:null), `${jours} jours camion`],
+ ['Dossiers', nf0.format(ndos), sansCA?`<span style="color:var(--orange)">${sansCA} sans CA</span>`:'tous avec CA']]);
+
+// ── Classement
+let sortKey='renta';
+function drawRank(){
+ const asc = sortKey==='pct_vide', arr=[...F].sort((a,b)=>((asc?1:-1)*((a[sortKey]??-1e9)-(b[sortKey]??-1e9))));
+ const maxKm = Math.max(...F.map(f=>f.km_total||0),1);
+ let h = `<div class="rank h"><div></div><div>Camion</div><div class="num">Renta €/km</div><div>Kilomètres</div><div class="num">CA</div><div class="num">Jours</div><div></div></div>`;
+ arr.forEach((f,i)=>{
+  const ch=(f.km_charge||0)-(f.km_groupage||0), g=f.km_groupage||0, v=f.km_vide||0, w=x=>(x/maxKm*100).toFixed(2)+'%';
+  const cls = cmp(f.renta);
+  const bd=[]; if(f.sans_ca) bd.push(`<span class="b o">${f.sans_ca} sans CA</span>`);
+  if(f.ecart_compteur!=null && Math.abs(f.ecart_compteur)>D.seuils.odo) bd.push(`<span class="b r">cpt ${f.ecart_compteur>0?'+':''}${nf1.format(f.ecart_compteur)} %</span>`);
+  if((f.plateaux||'').includes(',')) bd.push(`<span class="b p">accroche</span>`);
+  h+=`<div class="rank" data-tr="${esc(f.tracteur)}"><div class="n">${i+1}</div>
+   <div class="tr"><b>${esc(f.tracteur)}</b><span>${esc(f.chauffeurs||'—')}</span></div>
+   <div class="num renta ${cls}">${r3(f.renta)}</div>
+   <div><div class="bar"><i style="width:${w(ch)};background:var(--c-ch)"></i><i style="width:${w(g)};background:var(--c-grp)"></i><i style="width:${w(v)};background:var(--c-vide)"></i></div>
+    <div class="barlbl">${km(f.km_total)} km · ${pct(f.pct_vide)} vide</div></div>
+   <div class="num">${eur(f.ca)}</div><div class="num">${f.jours??'—'}</div><div class="badges">${bd.join('')}</div></div>`;
+ });
+ const el=document.getElementById('rank'); el.innerHTML=h;
+ el.querySelectorAll('.rank[data-tr]').forEach(r=>r.onclick=()=>{ showTab('cam'); selTruck(r.dataset.tr); });
+}
+document.querySelectorAll('#sort button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#sort button').forEach(x=>x.classList.remove('on'));b.classList.add('on');sortKey=b.dataset.s;drawRank();});
+drawRank();
+
+// ── Clients
+(function(){
+ const m={}; D.dossiers.forEach(d=>{const c=d.client||'—'; m[c]=m[c]||{ca:0,km:0,kmca:0,n:0,sans:0}; m[c].n++; m[c].km+=d.km_total||0;
+  if(d.ca_trouve===false) m[c].sans++; else {m[c].ca+=d.ca||0; m[c].kmca+=d.km_total||0;}});
+ const arr=Object.entries(m).sort((a,b)=>b[1].ca-a[1].ca), mx=Math.max(...arr.map(x=>x[1].ca),1);
+ document.getElementById('clients').innerHTML = arr.length? arr.map(([c,v])=>{const r=v.kmca?v.ca/v.kmca:null, cls=cmp(r);
+  return `<div class="cli"><div><b style="font-weight:600">${esc(c)}</b><div style="font-size:12px;color:var(--sub)">${v.n} dossier${v.n>1?'s':''} · ${km(v.km)} km${v.sans?` · <span style="color:var(--orange)">${v.sans} sans CA</span>`:''}</div></div>
+  <div class="bar" style="height:8px"><i style="width:${(v.ca/mx*100).toFixed(1)}%;background:var(--blue)"></i></div>
+  <div class="num">${eur(v.ca)}</div><div class="num ${cls}" style="font-weight:600">${r3(r)}</div></div>`}).join('') : '<div class="empty">Aucun dossier.</div>';
+})();
+
+// ── Tableaux triables
+function table(el, cols, rows){
+ let key=null, dir=-1;
+ function draw(){
+  const rs = key? [...rows].sort((a,b)=>{const x=a[key],y=b[key]; if(x==null) return 1; if(y==null) return -1; return (typeof x==='number'?x-y:String(x).localeCompare(String(y),'fr'))*dir;}) : rows;
+  el.innerHTML = rs.length? `<table><thead><tr>${cols.map(c=>`<th class="${c.r?'r':''}" data-k="${c.k}">${c.l}${key===c.k?(dir>0?' ↑':' ↓'):''}</th>`).join('')}</tr></thead>
+   <tbody>${rs.map(r=>`<tr>${cols.map(c=>`<td class="${c.r?'r':''}">${c.f?c.f(r[c.k],r):esc(r[c.k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun dossier.</div>';
+  el.querySelectorAll('th').forEach(th=>th.onclick=()=>{ if(key===th.dataset.k) dir=-dir; else {key=th.dataset.k; dir=-1;} draw(); });
+ }
+ draw();
+}
+const rentaCell = v => v==null?'<span style="color:var(--sub)">—</span>':`<b class="${cmp(v)}" style="font-weight:600">${r3(v)}</b>`;
+const dosBadges = (v,r) => [r.groupage?'<span class="b o">groupage</span>':'', r.ca_trouve===false?'<span class="b r">sans CA</span>':'', r.realise===false?'<span class="b n">prévu</span>':''].join(' ');
+const COLS_DOS = [
+ {k:'dossier',l:'Dossier'},{k:'tracteur',l:'Camion'},{k:'client',l:'Client'},
+ {k:'chargement',l:'Chargement'},{k:'dechargement',l:'Déchargement'},
+ {k:'ca',l:'CA',r:1,f:eur},{k:'km_charge',l:'KM ch.',r:1,f:km},{k:'km_vide',l:'KM vide',r:1,f:km},
+ {k:'renta',l:'Renta',r:1,f:rentaCell},{k:'groupage',l:'',f:dosBadges}];
+
+// ── Dossiers
+(function(){
+ const cl=[...new Set(D.dossiers.map(d=>d.client).filter(Boolean))].sort(), tr=F.map(f=>f.tracteur);
+ document.getElementById('fcli').innerHTML += cl.map(c=>`<option>${esc(c)}</option>`).join('');
+ document.getElementById('ftr').innerHTML += tr.map(c=>`<option>${esc(c)}</option>`).join('');
+ const go=()=>{ const q=document.getElementById('q').value.toLowerCase(), c=document.getElementById('fcli').value, t=document.getElementById('ftr').value;
+  const rows=D.dossiers.filter(d=>(!c||d.client===c)&&(!t||d.tracteur===t)&&(!q||[d.dossier,d.client,d.chargement,d.dechargement,d.chauffeur].join(' ').toLowerCase().includes(q)));
+  table(document.getElementById('dos'), COLS_DOS, rows);
+  const ca=sum(rows,'ca'), k=sum(rows,'km_total');
+  document.getElementById('dosfoot').textContent = `${rows.length} dossier(s) · CA ${eur(ca)} · ${km(k)} km · renta ${r3(k?ca/k:null)} €/km`; };
+ ['q','fcli','ftr'].forEach(id=>document.getElementById(id).addEventListener('input',go)); go();
+})();
+
+// ── Contrôles
+(function(){
+ const g={}; D.controles.forEach(c=>{(g[c.type]=g[c.type]||[]).push(c);});
+ const sev = t => /Vide|Écart|échoué|sans CA/.test(t)?'r':(/Accroche/.test(t)?'p':'o');
+ document.getElementById('ctl').innerHTML = Object.keys(g).length? Object.entries(g).sort((a,b)=>b[1].length-a[1].length).map(([t,l])=>
+  `<div class="ctrl-grp"><h3><span class="b ${sev(t)}">${l.length}</span>${esc(t)}</h3>${l.map(c=>`<div class="ctrl-item"><span>${esc(c.tracteur||'—')}</span><span>${esc(c.dossier||'')}</span><div>${esc(c.detail)}</div></div>`).join('')}</div>`).join('')
+  : '<div class="empty">Aucune anomalie détectée.</div>';
+ const btn=document.querySelector('[data-t=ctl]'); if(D.controles.length) btn.textContent=`Contrôles (${D.controles.length})`;
+})();
+
+// ── Camion
+let map=null, layer=null, cur=null;
+const sel=document.getElementById('trsel');
+sel.innerHTML = F.map(f=>`<option value="${esc(f.tracteur)}">${esc(f.tracteur)} — ${esc(f.chauffeurs||'')}</option>`).join('');
+sel.onchange=()=>selTruck(sel.value);
+document.getElementById('prv').onclick=()=>{const i=F.findIndex(f=>f.tracteur===cur); selTruck(F[(i-1+F.length)%F.length].tracteur);};
+document.getElementById('nxt').onclick=()=>{const i=F.findIndex(f=>f.tracteur===cur); selTruck(F[(i+1)%F.length].tracteur);};
+function selTruck(t){
+ cur=t; sel.value=t; const f=F.find(x=>x.tracteur===t); if(!f) return;
+ document.getElementById('trinfo').textContent = `Plateau ${f.plateaux||'—'} · ${f.dossiers} dossiers · ${f.arrets} arrêts`;
+ const cls = cmp(f.renta);
+ document.getElementById('tkpis').innerHTML = kpiHTML([
+  ['CA', eur(f.ca), `${eur(f.ca_jour)} / jour`],
+  ['Renta', `<span class="${cls}">${r3(f.renta)}</span>`, MOY?`moyenne flotte ${r3(MOY)}`:''],
+  ['KM chargés', km(f.km_charge), f.km_groupage?`dont ${km(f.km_groupage)} en groupage`:''],
+  ['KM à vide', km(f.km_vide), pct(f.pct_vide)],
+  ['Compteur', km(f.km_compteur), f.ecart_compteur==null?'':`${f.ecart_compteur>0?'+':''}${nf1.format(f.ecart_compteur)} % vs PTV`],
+  ['Jours', f.jours??'—', f.sans_ca?`<span style="color:var(--orange)">${f.sans_ca} dossier(s) sans CA</span>`:'']]);
+ drawTimeline(t); drawMap(t);
+ table(document.getElementById('tdos'), COLS_DOS.filter(c=>c.k!=='tracteur'), D.dossiers.filter(d=>d.tracteur===t));
+}
+function drawTimeline(t){
+ const A=D.arrets[t]||[], T=D.trajets[t]||[], byO={}; T.forEach(x=>byO[x.o]=x);
+ const legHTML = x => { if(!x) return ''; const c=COL[x.t]||'#999';
+  const extra = x.t==='À vide'&&x.km>D.seuils.vide?' <span class="b r">à vérifier</span>':'';
+  return `<div class="leg"><div class="ln" style="background:${c}"></div><div class="lt"><b>${km(x.km)} km</b> · ${x.t.toLowerCase()}${x.bord.length?' · '+x.bord.join(', '):''}${x.cpt!=null?(x.grp?' · <span title="Relevés compteur pris au même moment : valeur non exploitable">compteur groupé</span>':` · compteur ${km(x.cpt)}`):''}${extra}</div></div>`; };
+ let h='';
+ const pre=byO[0]; if(pre) h+=`<div class="stop prev"><div class="act CH">CH*</div><div class="pl"><b>${esc(pre.dn||pre.dv)}</b><div>${esc(pre.dv)} (${esc(pre.dp)}) · chargement avant la période</div></div><div class="tm"></div></div>`+legHTML(pre);
+ A.forEach((a,i)=>{
+  const site = a.site!=null?`<div>${nf1.format(a.site)} h sur site</div>`:'';
+  const warn = a.site!=null&&a.site>D.seuils.site?' style="color:var(--orange)"':'';
+  h+=`<div class="stop ${a.real?'':'prev'}"><div class="act ${a.act}">${a.act}</div>
+   <div class="pl"><b>${esc(a.nom)}</b><div>${esc(a.v)} (${esc(a.p)}-${esc(a.cp)}) · ${esc(a.d)}${a.real?'':' · prévu'}</div></div>
+   <div class="tm"${warn}><div>${a.arr||a.prevu||''}</div>${site}</div></div>`;
+  h+=legHTML(byO[a.o]);
+ });
+ document.getElementById('tl').innerHTML = h || '<div class="empty">Aucun arrêt.</div>';
+}
+function drawMap(t){
+ if(typeof L==='undefined'){ document.getElementById('map').innerHTML='<div class="empty">Carte indisponible (hors ligne).</div>'; return; }
+ if(!map){ map=L.map('map',{zoomControl:true,attributionControl:true});
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap · © CARTO',maxZoom:18}).addTo(map); }
+ if(layer) layer.remove(); layer=L.featureGroup().addTo(map);
+ const T=(D.trajets[t]||[]).filter(x=>x.la!=null&&x.lb!=null), pts={};
+ T.forEach(x=>{
+  L.polyline([[x.la,x.lo],[x.lb,x.lob]],{color:COL[x.t]||'#999',weight:x.t==='À vide'?3:4,opacity:.9,dashArray:x.t==='À vide'?'6 6':null})
+   .bindTooltip(`${esc(x.dv)} → ${esc(x.av)}<br><b>${km(x.km)} km</b> · ${x.t}${x.bord.length?'<br>'+x.bord.join(', '):''}`,{sticky:true}).addTo(layer);
+  pts[x.la+','+x.lo]=[x.la,x.lo,x.dn||x.dv]; pts[x.lb+','+x.lob]=[x.lb,x.lob,x.an||x.av];
+ });
+ Object.values(pts).forEach(([a,b,n])=>L.circleMarker([a,b],{radius:5,color:'#fff',weight:2,fillColor:'#1d1d1f',fillOpacity:1}).bindTooltip(esc(n)).addTo(layer));
+ setTimeout(()=>{ map.invalidateSize(); if(layer.getLayers().length) map.fitBounds(layer.getBounds(),{padding:[30,30]}); else map.setView([48.5,4],5); },50);
+}
+
+// ── Onglets
+function showTab(t){ document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+ ['vue','cam','dos','ctl'].forEach(x=>document.getElementById('t-'+x).classList.toggle('hide',x!==t));
+ if(t==='cam'){ if(!cur&&F.length) selTruck(F[0].tracteur); else if(map) setTimeout(()=>map.invalidateSize(),50); } }
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.t));
+</script></body></html>"""
 
 
 def main():
@@ -899,7 +1243,8 @@ def main():
             bar.progress(min(max(pct, 0.0), 1.0))
         try:
             res = calculer(sel, ca_dict, convention, reconstituer, progress_cb=_p)
-            st.session_state["rp_res"] = dict(res=res, sel=sel, convention=convention)
+            st.session_state["rp_res"] = dict(res=res, sel=sel, convention=convention,
+                                              genere=pd.Timestamp.now(tz="Europe/Brussels").strftime("%d/%m/%Y %H:%M"))
             bar.progress(1.0)
             txt.empty()
         except Exception as e:
@@ -911,142 +1256,32 @@ def main():
     df_traj, df_dos, df_flotte, df_ctrl = st.session_state["rp_res"]["res"]
     sel_c = st.session_state["rp_res"]["sel"]
 
-    # ── Synthèse ──
-    ui.section("Synthèse")
-    ca_t, km_t = df_flotte["ca"].sum(), df_flotte["km_total"].sum()
-    km_v = df_flotte["km_vide"].sum()
-    m = st.columns(5)
-    m[0].metric("CA", _fmt_eur(ca_t))
-    m[1].metric("KM total", _fmt_km(km_t))
-    m[2].metric("% à vide", f"{km_v / km_t * 100:.1f} %" if km_t else "—")
-    m[3].metric("Renta €/km", f"{ca_t / km_t:.3f}" if km_t else "—")
-    m[4].metric("Contrôles", len(df_ctrl))
+    # ── Résultats ──
+    ui.section("Résultats")
+    conv = st.session_state["rp_res"].get("convention", "precedent")
+    d0, d1 = sel_c["ts_plan"].min(), sel_c["ts_plan"].max()
+    meta = dict(
+        periode=(f"{d0:%d/%m/%Y} → {d1:%d/%m/%Y}" if pd.notna(d0) and pd.notna(d1) else ""),
+        convention="Vide imputé au " + CONVENTIONS_VIDE.get(conv, conv).lower(),
+        genere=st.session_state["rp_res"].get("genere", ""),
+    )
+    page_html = construire_tableau_de_bord(df_flotte, df_dos, df_traj, df_ctrl, sel_c, meta)
 
-    t_fl, t_tour, t_dos, t_ctrl = st.tabs(["Flotte", "Tournée par camion", "Dossiers", "Contrôles"])
-
-    with t_fl:
-        st.dataframe(
-            df_flotte.sort_values("renta", ascending=False)[list(COLS_FLOTTE)],
-            hide_index=True, use_container_width=True,
-            column_config={
-                "tracteur": "Tracteur", "chauffeurs": "Chauffeur(s)", "plateaux": "Plateau(x)",
-                "jours": "Jours", "dossiers": "Dossiers",
-                "ca": st.column_config.NumberColumn("CA", format="%.0f €"),
-                "km_charge": st.column_config.NumberColumn("KM chargés", format="%.0f"),
-                "km_vide": st.column_config.NumberColumn("KM à vide", format="%.0f"),
-                "km_total": st.column_config.NumberColumn("KM total", format="%.0f"),
-                "pct_vide": st.column_config.ProgressColumn("% vide", format="%.1f %%", min_value=0, max_value=50),
-                "renta": st.column_config.NumberColumn("Renta €/km", format="%.3f"),
-                "ca_jour": st.column_config.NumberColumn("CA / jour", format="%.0f €"),
-                "sans_ca": st.column_config.NumberColumn("Sans CA", help="Dossiers absents du fichier CA : "
-                                                         "leurs km comptent, pas leur CA — renta sous-estimée."),
-                "km_compteur": st.column_config.NumberColumn("KM compteur", format="%.0f"),
-                "ecart_compteur": st.column_config.NumberColumn("Écart compteur", format="%+.1f %%"),
-            })
-        st.caption("Le compteur couvre du premier au dernier arrêt pointé ; l'écart est calculé face aux km PTV "
-                   "du même intervalle. Renta = CA ÷ km total du camion (ratio des sommes).")
-
-    with t_tour:
-        trs = df_flotte["tracteur"].tolist()
-        tr = st.selectbox("Tracteur", trs, format_func=lambda t: (
-            f"{t} — {df_flotte.set_index('tracteur').at[t, 'chauffeurs']}"))
-        f = df_flotte.set_index("tracteur").loc[tr]
-        q = st.columns(5)
-        q[0].metric("CA", _fmt_eur(f["ca"]))
-        q[1].metric("KM chargés", _fmt_km(f["km_charge"]))
-        q[2].metric("KM à vide", _fmt_km(f["km_vide"]))
-        q[3].metric("Renta €/km", "—" if pd.isna(f["renta"]) else f"{f['renta']:.3f}")
-        q[4].metric("KM compteur", _fmt_km(f["km_compteur"]),
-                    None if pd.isna(f["ecart_compteur"]) else f"{f['ecart_compteur']:+.1f} % vs PTV",
-                    delta_color="off")
-        tj = _traj_affichage(df_traj[df_traj["tracteur"] == tr].sort_values("ordre"))
-        _carte(tj, sel_c[sel_c["tracteur"] == tr])
-
-        # Arrêts avec temps sur site
-        ar = sel_c[sel_c["tracteur"] == tr].sort_values("ordre").copy()
-        ar["temps_site"] = ((ar["ts_dep"] - ar["ts_arr"]).dt.total_seconds() / 3600).round(1)
-        st.markdown("#### Trajets")
-        _legende_types()
-        st.dataframe(
-            tj[["ordre", "de_act", "de_nom", "de_ville", "a_act", "a_nom", "a_ville", "type", "bord", "km",
-                "km_compteur", "a_ts"]],
-            hide_index=True, use_container_width=True,
-            column_config={
-                "ordre": "N°", "de_act": "", "de_nom": "Départ", "de_ville": "Ville", "a_act": "",
-                "a_nom": "Arrivée", "a_ville": "Ville", "type": "Type", "bord": "À bord",
-                "km": st.column_config.NumberColumn("KM PTV", format="%.0f"),
-                "km_compteur": st.column_config.NumberColumn("KM compteur", format="%.0f",
-                                                             help="Indicatif : relevés parfois groupés."),
-                "a_ts": st.column_config.DatetimeColumn("Arrivée", format="DD/MM HH:mm")})
-        st.markdown("#### Arrêts")
-        st.dataframe(
-            ar[["ordre", "dossier", "activite", "nom", "ville", "pays", "ts_plan", "ts_arr", "ts_dep",
-                "temps_site", "odo_km", "chauffeur", "plateau"]],
-            hide_index=True, use_container_width=True,
-            column_config={
-                "ordre": "N°", "dossier": "Dossier", "activite": "Act.", "nom": "Lieu", "ville": "Ville",
-                "pays": "Pays", "ts_plan": st.column_config.DatetimeColumn("Prévu", format="DD/MM HH:mm"),
-                "ts_arr": st.column_config.DatetimeColumn("Arrivée", format="DD/MM HH:mm"),
-                "ts_dep": st.column_config.DatetimeColumn("Départ", format="DD/MM HH:mm"),
-                "temps_site": st.column_config.NumberColumn("Sur site (h)", format="%.1f"),
-                "odo_km": st.column_config.NumberColumn("Compteur", format="%.0f"),
-                "chauffeur": "Chauffeur", "plateau": "Plateau"})
-        longs = ar[ar["temps_site"] > SEUIL_TEMPS_SITE]
-        if not longs.empty:
-            st.caption(f"{len(longs)} arrêt(s) de plus de {SEUIL_TEMPS_SITE:.0f} h sur site : "
-                       + ", ".join(f"{r.ville} ({r.temps_site:.1f} h)" for r in longs.itertuples()))
-
-    with t_dos:
-        dd = df_dos.sort_values(["tracteur", "date_debut"])
-        clients = sorted(c for c in dd["client"].dropna().unique() if c)
-        fc = st.multiselect("Client", clients, default=[], placeholder="Tous les clients")
-        if fc:
-            dd = dd[dd["client"].isin(fc)]
-        st.dataframe(
-            dd[list(COLS_DOSSIERS)], hide_index=True, use_container_width=True,
-            column_config={
-                "tracteur": "Tracteur", "chauffeur": "Chauffeur", "dossier": "Dossier", "client": "Client",
-                "chargement": "Chargement", "dechargement": "Déchargement", "produit": "Produit",
-                "poids": st.column_config.NumberColumn("Poids (t)", format="%.2f"),
-                "ca": st.column_config.NumberColumn("CA", format="%.2f €"),
-                "km_charge": st.column_config.NumberColumn("KM chargés", format="%.0f"),
-                "km_vide": st.column_config.NumberColumn("KM à vide", format="%.0f"),
-                "km_total": st.column_config.NumberColumn("KM total", format="%.0f"),
-                "renta": st.column_config.NumberColumn("Renta €/km", format="%.3f"),
-                "groupage": "Groupage", "realise": "Réalisé", "etat_vente": "État vente",
-                "vente_planning": "Vente planning"})
-        if not dd.empty:
-            par_client = dd.groupby("client", as_index=False).agg(
-                dossiers=("dossier", "nunique"), ca=("ca", "sum"), km=("km_total", "sum"))
-            par_client["renta"] = (par_client["ca"] / par_client["km"].replace(0, np.nan)).round(3)
-            st.markdown("#### Par client")
-            st.dataframe(par_client.sort_values("ca", ascending=False), hide_index=True,
-                         use_container_width=True, column_config={
-                             "client": "Client", "dossiers": "Dossiers",
-                             "ca": st.column_config.NumberColumn("CA", format="%.0f €"),
-                             "km": st.column_config.NumberColumn("KM", format="%.0f"),
-                             "renta": st.column_config.NumberColumn("Renta €/km", format="%.3f")})
-
-    with t_ctrl:
-        if df_ctrl.empty:
-            st.success("Aucune anomalie détectée.")
-        else:
-            resume = df_ctrl.groupby("type").size().sort_values(ascending=False)
-            st.caption(" · ".join(f"{t} : {n}" for t, n in resume.items()))
-            st.dataframe(df_ctrl[list(COLS_CTRL)], hide_index=True, use_container_width=True,
-                         column_config={"type": "Contrôle", "tracteur": "Tracteur", "dossier": "Dossier",
-                                        "detail": "Détail"})
-
-    st.write("")
-    b1, b2 = st.columns([1, 1])
+    b1, b2, b3, b4 = st.columns([1.15, 1.25, 1.1, 1], vertical_alignment="top")
     with b1:
-        st.download_button("Télécharger le rapport Excel", data=export_excel(df_flotte, df_dos, df_traj, df_ctrl),
-                           file_name="Rapport_Renta_Plateau.xlsx", type="primary",
+        st.download_button("Rapport Excel", data=export_excel(df_flotte, df_dos, df_traj, df_ctrl),
+                           file_name="Rapport_Renta_Plateau.xlsx", type="primary", use_container_width=True,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with b2:
-        if st.button("Nouveau calcul"):
+        st.download_button("Tableau de bord (HTML)", data=page_html.encode("utf-8"),
+                           file_name="Renta_Plateau.html", mime="text/html", use_container_width=True)
+    with b3:
+        bouton_plein_ecran(page_html)
+    with b4:
+        if st.button("Nouveau calcul", use_container_width=True):
             st.session_state.pop("rp_res", None)
             st.rerun()
+    components.html(page_html, height=1320, scrolling=True)
 
 
 if os.environ.get("RENTA_PLATEAU_NO_UI") != "1":
