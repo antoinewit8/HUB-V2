@@ -796,7 +796,25 @@ def construire_tableau_de_bord(df_flotte, df_dos, df_traj, df_ctrl, stops, meta:
         seuils=dict(vide=SEUIL_ALERTE_VIDE, site=SEUIL_TEMPS_SITE, odo=SEUIL_ECART_ODO),
     )
     data = json.dumps(payload, ensure_ascii=False, default=str).replace("</", "<\\/")
-    return DASH_HTML.replace("__DATA__", data, 1)
+    a = _assets_dashboard()
+    return (DASH_HTML.replace("__FONTS__", a["fonts"], 1).replace("__LEAFLET_CSS__", a["css"], 1)
+            .replace("__LEAFLET_JS__", a["js"], 1).replace("__DATA__", data, 1))
+
+
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "renta_plateau")
+
+
+@st.cache_resource(show_spinner=False)
+def _assets_dashboard():
+    """Leaflet et la police Inter embarqués dans la page : aucune dépendance à un CDN (iframe, réseau d'entreprise)."""
+    import base64
+    lire = lambda n: open(os.path.join(ASSETS_DIR, n), encoding="utf-8").read()
+    fonts = ""
+    for w in (400, 500, 600, 700):
+        b64 = base64.b64encode(open(os.path.join(ASSETS_DIR, f"inter-latin-{w}-normal.woff2"), "rb").read()).decode()
+        fonts += (f"@font-face{{font-family:'Inter';font-style:normal;font-weight:{w};font-display:swap;"
+                  f"src:url(data:font/woff2;base64,{b64}) format('woff2')}}")
+    return {"fonts": fonts, "css": lire("leaflet.css"), "js": lire("leaflet.js").replace("</script", "<\\/script")}
 
 
 def bouton_plein_ecran(page_html: str):
@@ -823,14 +841,16 @@ document.getElementById('b').onclick = () => {{
 DASH_HTML = r"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Rentabilité plateau</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>__FONTS__</style>
+<style>__LEAFLET_CSS__</style>
+<script>__LEAFLET_JS__</script>
 <style>
 :root{--bg:#f5f5f7;--card:#fff;--text:#1d1d1f;--sub:#6e6e73;--line:#d2d2d7;--hair:#e5e5ea;--soft:#e8e8ed;
 --blue:#0071e3;--green:#248a3d;--green-bg:#e3f5e8;--orange:#c93400;--orange-bg:#fff1e6;--red:#d70015;--red-bg:#fde8ea;
 --c-ch:#0071e3;--c-vide:#a1a1a6;--c-grp:#ff9500;--c-rec:#af52de;
 --shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06);
 --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Inter","Helvetica Neue",Arial,sans-serif}
+body,button,input,select,table{font-family:var(--font)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased;font-size:14px}
 .wrap{max-width:1180px;margin:0 auto;padding:22px 20px 40px}
@@ -1092,7 +1112,9 @@ function drawTimeline(t){
 function drawMap(t){
  if(typeof L==='undefined'){ document.getElementById('map').innerHTML='<div class="empty">Carte indisponible (hors ligne).</div>'; return; }
  if(!map){ map=L.map('map',{zoomControl:true,attributionControl:true});
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap · © CARTO',maxZoom:18}).addTo(map); }
+  const esri = s => `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`;
+  L.tileLayer(esri('Canvas/World_Light_Gray_Base'),{attribution:'Tiles © Esri',maxNativeZoom:16,maxZoom:18}).addTo(map);
+  L.tileLayer(esri('Canvas/World_Light_Gray_Reference'),{maxNativeZoom:16,maxZoom:18}).addTo(map); }
  if(layer) layer.remove(); layer=L.featureGroup().addTo(map);
  const T=(D.trajets[t]||[]).filter(x=>x.la!=null&&x.lb!=null), pts={};
  T.forEach(x=>{
