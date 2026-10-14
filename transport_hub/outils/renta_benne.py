@@ -447,13 +447,25 @@ def _controle_vide(km):
     return ""
 
 
-def compute_km_benne(df, progress_cb=None):
+def compute_km_benne(df, progress_cb=None, mode_ordre="fichier"):
+    """
+    mode_ordre :
+      • "fichier" (défaut) — la tournée suit l'ordre des lignes du fichier, c.-à-d. l'ordre
+        du planning. C'est la référence : les dates de l'export ne sont pas fiables pour
+        ordonner (pas d'heure, chargements parfois datés avant le déchargement précédent).
+      • "dates" — la tournée est reconstituée d'après les dates (jour de déchargement +
+        enchaînement le plus court entre rotations d'un même jour). Uniquement si le
+        fichier n'est PAS dans l'ordre du planning.
+    """
     # Ordre de départ = ordre du fichier (jamais un tri instable sur des dates sans heure)
     df = df.copy().sort_values("ordre_fichier", kind="stable").reset_index(drop=True)
 
     # Lignes sans aucune date valide : km chargé calculé quand même, mais EXCLUES des km à vide
     # (une rotation sans date ne peut pas être placée dans la tournée → trajet à vide incalculable)
     a_une_date = df["date_charg_dt"].notna() | df["date_decharg_dt"].notna()
+    if mode_ordre == "fichier":
+        # L'ordre vient du fichier : une date manquante n'empêche pas de placer la rotation
+        a_une_date = pd.Series(True, index=df.index)
     df_valid   = df[a_une_date].copy().reset_index(drop=True)
     df_no_date = df[~a_une_date].copy()
 
@@ -488,15 +500,24 @@ def compute_km_benne(df, progress_cb=None):
             st.warning(f"Géocodage échoué : **{label}** ({pays})")
 
     # 1bis. Reconstitution de l'ordre réel de la tournée (par véhicule si la colonne existe)
-    if progress_cb:
-        progress_cb("🧭 Reconstitution de l'ordre de la tournée…", 0.0)
+    def _ordre_fichier(g):
+        g = g.sort_values("ordre_fichier", kind="stable").reset_index(drop=True)
+        g["ordre_tournee"] = range(1, len(g) + 1)
+        return g
+
+    ordonner = _ordre_fichier
+    if mode_ordre == "dates":
+        if progress_cb:
+            progress_cb("🧭 Reconstitution de l'ordre de la tournée d'après les dates…", 0.0)
+        ordonner = lambda g: ordonner_tournee(g, points)
+
     if "vehicule" in df_valid.columns and (df_valid["vehicule"] != "").any():
         df_valid = pd.concat(
-            [ordonner_tournee(g, points) for _, g in df_valid.groupby("vehicule", sort=True)],
+            [ordonner(g) for _, g in df_valid.groupby("vehicule", sort=True)],
             ignore_index=True,
         )
     else:
-        df_valid = ordonner_tournee(df_valid, points)
+        df_valid = ordonner(df_valid)
 
     # 2. Km chargés — sur TOUTES les rotations (df complet, y compris sans date)
     def _km_charges_for(df_src):
@@ -804,9 +825,20 @@ if file_benne and file_ca:
     st.info(
         f"Géocodage des arrêts et calcul km PTV pour les **{nb_rot} rotations**. "
         f"Les km à vide sont calculés de chaque déchargement vers le chargement "
-        f"suivant de la tournée (ordre reconstitué par jour de déchargement, "
-        f"puis enchaînement le plus cohérent entre rotations du même jour)."
+        f"suivant de la tournée."
     )
+
+    choix_ordre = st.radio(
+        "Ordre de la tournée :",
+        ["Ordre du fichier (planning)", "Reconstituer d'après les dates"],
+        index=0,
+        horizontal=True,
+        help="Par défaut, la tournée suit l'ordre des lignes du fichier (ordre du planning). "
+             "« Reconstituer d'après les dates » ne sert que si le fichier a été trié ou "
+             "mélangé : les dates de l'export n'ont pas d'heure et un chargement est parfois "
+             "daté avant le déchargement précédent.",
+    )
+    mode_ordre = "dates" if choix_ordre.startswith("Reconstituer") else "fichier"
 
     btn_ptv = st.button("Lancer le calcul PTV", type="primary")
 
@@ -822,7 +854,8 @@ if file_benne and file_ca:
             progress_bar.progress(min(float(pct), 1.0))
 
         try:
-            df_result, df_vide = compute_km_benne(df_joint, progress_cb=_progress)
+            df_result, df_vide = compute_km_benne(df_joint, progress_cb=_progress,
+                                                 mode_ordre=mode_ordre)
             progress_bar.progress(1.0)
             status_text.success("Calcul PTV terminé !")
             st.session_state["df_result_benne"] = df_result
