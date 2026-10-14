@@ -27,6 +27,8 @@ import time
 import os
 import io
 import re
+import math
+import itertools
 from dotenv import load_dotenv
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
@@ -44,6 +46,10 @@ HEADERS      = {"apiKey": PTV_API_KEY}
 MAX_RETRIES  = 3
 RETRY_DELAY  = 2
 VEHICLE      = "EUR_TRAILER_TRUCK"
+
+# Ordonnancement de la tournée
+SEUIL_ALERTE_VIDE = 150   # km — au-delà, le trajet à vide est signalé « à vérifier »
+MAX_PERMUT_JOUR   = 7     # nb max de rotations d'un même jour testées en toutes permutations
 
 PAYS_CODE_TO_ISO2 = {
     "F": "FR", "B": "BE", "D": "DE", "L": "LU", "NL": "NL",
@@ -200,6 +206,8 @@ BENNE_COLS = {
     "date_decharg":  ["Date Décharg.", "Date Decharg.", "Date décharg.", "Date déchargement"],
     "cp_decharg":    ["C.P. Déharg.", "C.P. Décharg.", "CP Décharg.", "CP decharg.", "C.P. decharg"],
     "ville_decharg": ["Localité Décharg.", "Localite Decharg.", "Ville décharg.", "Localité déchargement"],
+    # Optionnel : si présent, la tournée (et donc les km à vide) est chaînée par véhicule
+    "vehicule":      ["Véhicule", "Vehicule", "Immatriculation", "Immat.", "Immat", "Tracteur", "Camion"],
 }
 
 
@@ -245,6 +253,10 @@ def parse_benne(file):
         df[col] = df[col].apply(_clean)
 
     df = df[df["dossier"] != ""].reset_index(drop=True)
+
+    # Ordre des lignes dans le fichier source = ordre du planning.
+    # Sert de départage quand deux rotations ont la même date (les dates n'ont pas d'heure).
+    df["ordre_fichier"] = range(1, len(df) + 1)
 
     import datetime as _dt
 
@@ -349,13 +361,101 @@ def join_ca(df_benne, ca_dict):
 #  CALCUL KM VIA PTV
 # ══════════════════════════════════════════════════════════════════
 
-def compute_km_benne(df, progress_cb=None):
-    df = df.copy().sort_values("date_charg_dt", na_position="last").reset_index(drop=True)
+def _stop_key(row, prefix):
+    return (
+        str(row.get(f"ville_{prefix}",  "") or "").strip(),
+        str(row.get(f"cp_{prefix}_num", "") or "").strip(),
+        str(row.get(f"pays_{prefix}",   "") or "").upper(),
+    )
 
-    # Lignes sans date valide : km chargé calculé quand même, mais EXCLUES des km à vide
-    # (une rotation sans date ne peut pas être placée chronologiquement → trajet à vide incalculable)
-    df_valid   = df[df["date_charg_dt"].notna()].copy().reset_index(drop=True)
-    df_no_date = df[df["date_charg_dt"].isna()].copy()
+
+def _haversine_km(a, b):
+    """Distance à vol d'oiseau (km). 0 si un point est inconnu (pas de pénalité)."""
+    if not a or not b:
+        return 0.0
+    lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = (math.sin((lat2 - lat1) / 2) ** 2
+         + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2)
+    return 6371.0 * 2 * math.asin(math.sqrt(h))
+
+
+def ordonner_tournee(df, points):
+    """
+    Reconstitue l'ordre réel de la tournée.
+
+    Problème de l'ancien tri (date de chargement seule) :
+      • les dates n'ont pas d'heure → plusieurs rotations ont la même date ;
+      • le tri pandas par défaut n'est pas stable → il permutait ces rotations
+        au hasard, d'où des « Obourg → Mantes » à vide de ~300 km qui n'existent pas ;
+      • la date de chargement est parfois antérieure au déchargement précédent
+        (ex. chargement saisi la veille), ce qui casse l'ordre.
+
+    Méthode :
+      1. Regroupement par JOUR DE DÉCHARGEMENT (fallback : jour de chargement).
+      2. Jours traités dans l'ordre chronologique.
+      3. Dans un même jour, on retient l'enchaînement qui minimise les km à vide
+         (vol d'oiseau, depuis la position où le camion a fini la veille).
+         À coût égal, l'ordre du fichier est conservé.
+    """
+    df = df.copy()
+    df["_jour"] = df["date_decharg_dt"].fillna(df["date_charg_dt"]).dt.normalize()
+    df = df.sort_values(["_jour", "ordre_fichier"], kind="stable")
+
+    coord_ch = {i: points.get(_stop_key(r, "charg"))   for i, r in df.iterrows()}
+    coord_de = {i: points.get(_stop_key(r, "decharg")) for i, r in df.iterrows()}
+
+    def _cout(seq, depart):
+        total, pos = 0.0, depart
+        for k in seq:
+            total += _haversine_km(pos, coord_ch[k])
+            pos = coord_de[k]
+        return total
+
+    ordre, position = [], None
+    for _, grp in df.groupby("_jour", sort=True):
+        idx = list(grp.index)  # déjà dans l'ordre du fichier
+        if len(idx) == 1:
+            best = idx
+        elif len(idx) <= MAX_PERMUT_JOUR:
+            best, best_cout = idx, _cout(idx, position)
+            for perm in itertools.permutations(idx):
+                c = _cout(perm, position)
+                if c < best_cout - 0.5:          # strictement meilleur → sinon on garde l'ordre fichier
+                    best, best_cout = list(perm), c
+        else:
+            # Trop de rotations le même jour → plus proche voisin
+            restants, best, pos = idx[:], [], position
+            while restants:
+                k = min(restants, key=lambda j: (_haversine_km(pos, coord_ch[j]), restants.index(j)))
+                best.append(k)
+                restants.remove(k)
+                pos = coord_de[k]
+        ordre.extend(best)
+        position = coord_de[best[-1]]
+
+    out = df.loc[ordre].drop(columns="_jour").reset_index(drop=True)
+    out["ordre_tournee"] = range(1, len(out) + 1)
+    return out
+
+
+def _controle_vide(km):
+    try:
+        if km is not None and not pd.isna(km) and float(km) > SEUIL_ALERTE_VIDE:
+            return f"⚠️ Vide > {SEUIL_ALERTE_VIDE} km — à vérifier"
+    except Exception:
+        pass
+    return ""
+
+
+def compute_km_benne(df, progress_cb=None):
+    # Ordre de départ = ordre du fichier (jamais un tri instable sur des dates sans heure)
+    df = df.copy().sort_values("ordre_fichier", kind="stable").reset_index(drop=True)
+
+    # Lignes sans aucune date valide : km chargé calculé quand même, mais EXCLUES des km à vide
+    # (une rotation sans date ne peut pas être placée dans la tournée → trajet à vide incalculable)
+    a_une_date = df["date_charg_dt"].notna() | df["date_decharg_dt"].notna()
+    df_valid   = df[a_une_date].copy().reset_index(drop=True)
+    df_no_date = df[~a_une_date].copy()
 
     if not df_no_date.empty:
         dossiers_nd = df_no_date["dossier"].tolist()
@@ -387,6 +487,17 @@ def compute_km_benne(df, progress_cb=None):
         if coords is None and (ville or cp):
             st.warning(f"Géocodage échoué : **{label}** ({pays})")
 
+    # 1bis. Reconstitution de l'ordre réel de la tournée (par véhicule si la colonne existe)
+    if progress_cb:
+        progress_cb("🧭 Reconstitution de l'ordre de la tournée…", 0.0)
+    if "vehicule" in df_valid.columns and (df_valid["vehicule"] != "").any():
+        df_valid = pd.concat(
+            [ordonner_tournee(g, points) for _, g in df_valid.groupby("vehicule", sort=True)],
+            ignore_index=True,
+        )
+    else:
+        df_valid = ordonner_tournee(df_valid, points)
+
     # 2. Km chargés — sur TOUTES les rotations (df complet, y compris sans date)
     def _km_charges_for(df_src):
         result = []
@@ -413,6 +524,9 @@ def compute_km_benne(df, progress_cb=None):
     vide_detail    = []
 
     for i in range(len(df_valid) - 1):
+        # Pas de trajet à vide entre deux véhicules différents
+        if "vehicule" in df_valid.columns and df_valid.at[i, "vehicule"] != df_valid.at[i+1, "vehicule"]:
+            continue
         key_de = (str(df_valid.at[i,   "ville_decharg"]  or "").strip(),
                   str(df_valid.at[i,   "cp_decharg_num"] or "").strip(),
                   str(df_valid.at[i,   "pays_decharg"]   or "").upper())
@@ -427,8 +541,8 @@ def compute_km_benne(df, progress_cb=None):
         km_v = calculate_route_km(points.get(key_de), points.get(key_ch_next))
         km_vides_valid[i] = km_v
         vide_detail.append({
-            "rotation_depart":  i + 1,
-            "rotation_arrivee": i + 2,
+            "rotation_depart":  int(df_valid.at[i,   "ordre_tournee"]),
+            "rotation_arrivee": int(df_valid.at[i+1, "ordre_tournee"]),
             "dossier_depart":   df_valid.at[i,   "dossier"],
             "dossier_arrivee":  df_valid.at[i+1, "dossier"],
             "ville_depart":     df_valid.at[i,   "ville_decharg"],
@@ -438,12 +552,14 @@ def compute_km_benne(df, progress_cb=None):
             "date_depart":      df_valid.at[i,   "date_decharg_dt"],
             "date_arrivee":     df_valid.at[i+1, "date_charg_dt"],
             "km_vide":          km_v,
+            "controle":         _controle_vide(km_v),
         })
 
     df_valid["km_vide"] = km_vides_valid
 
     # Réassembler : rotations sans date → km_vide = None
     df = pd.concat([df_valid, df_no_date], ignore_index=True)
+    df["controle"] = df["km_vide"].apply(_controle_vide)
 
     df["km_complet"] = df["km_charge"].fillna(0) + df["km_vide"].fillna(0)
     df["renta_km"]   = (df["total_ventes"] / df["km_complet"].replace(0, np.nan)).round(3)
@@ -493,6 +609,9 @@ def export_excel_benne(df_result, df_vide, df_periode):
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
 
             col_rename = {
+                "ordre_tournee": "Ordre tournée",
+                "ordre_fichier": "Ligne fichier",
+                "vehicule":      "Véhicule",
                 "dossier":       "N° Dossier",
                 "date_charg":    "Date charg.",
                 "ville_charg":   "Chargement",
@@ -507,8 +626,11 @@ def export_excel_benne(df_result, df_vide, df_periode):
                 "km_vide":       "KM À Vide",
                 "km_complet":    "KM Complet",
                 "renta_km":      "Renta €/km",
+                "controle":      "Contrôle",
             }
             cols = [c for c in col_rename if c in df_result.columns]
+            if "vehicule" in cols and not (df_result["vehicule"] != "").any():
+                cols.remove("vehicule")
             df_result[cols].rename(columns=col_rename).fillna("").to_excel(
                 writer, sheet_name="Rotations", index=False)
             _style_sheet(writer.sheets["Rotations"], len(df_result))
@@ -524,7 +646,7 @@ def export_excel_benne(df_result, df_vide, df_periode):
                     "ville_depart": "Ville départ", "cp_depart": "CP départ",
                     "ville_arrivee": "Ville arrivée", "cp_arrivee": "CP arrivée",
                     "date_depart": "Date départ", "date_arrivee": "Date arrivée",
-                    "km_vide": "KM À Vide",
+                    "km_vide": "KM À Vide", "controle": "Contrôle",
                 }
                 cols_v = [c for c in vide_rename if c in df_vide.columns]
                 df_vide[cols_v].rename(columns=vide_rename).fillna("").to_excel(
@@ -682,7 +804,8 @@ if file_benne and file_ca:
     st.info(
         f"Géocodage des arrêts et calcul km PTV pour les **{nb_rot} rotations**. "
         f"Les km à vide sont calculés de chaque déchargement vers le chargement "
-        f"suivant (ordre chronologique)."
+        f"suivant de la tournée (ordre reconstitué par jour de déchargement, "
+        f"puis enchaînement le plus cohérent entre rotations du même jour)."
     )
 
     btn_ptv = st.button("Lancer le calcul PTV", type="primary")
@@ -730,6 +853,14 @@ if file_benne and file_ca:
         kp5.metric("Total Ventes",   f"{ca_tot:,.2f} €")
         kp6.metric("Rentabilité",    f"{rent_global:.3f} €/km")
 
+        if "controle" in df_result.columns:
+            df_alertes = df_result[df_result["controle"] != ""]
+            if not df_alertes.empty:
+                st.warning(
+                    f"**{len(df_alertes)} trajet(s) à vide > {SEUIL_ALERTE_VIDE} km** à vérifier "
+                    f"(onglet « KM à vide détail ») : `{df_alertes['dossier'].tolist()}`"
+                )
+
         tab1, tab2, tab3, tab4 = st.tabs([
             "Détail rotations",
             "Résumé semaine",
@@ -738,11 +869,13 @@ if file_benne and file_ca:
         ])
 
         with tab1:
-            cols_res = ["dossier", "date_charg", "ville_charg", "cp_charg",
+            cols_res = ["ordre_tournee", "dossier", "date_charg", "ville_charg", "cp_charg",
                         "ville_decharg", "cp_decharg", "client",
-                        "total_ventes", "km_charge", "km_vide", "km_complet", "renta_km"]
+                        "total_ventes", "km_charge", "km_vide", "km_complet", "renta_km", "controle"]
             st.dataframe(
                 df_result[[c for c in cols_res if c in df_result.columns]].rename(columns={
+                    "ordre_tournee": "Ordre tournée",
+                    "controle":      "Contrôle",
                     "dossier":       "N° Dossier",
                     "date_charg":    "Date charg.",
                     "ville_charg":   "Chargement",
@@ -774,7 +907,7 @@ if file_benne and file_ca:
                         "dossier_depart": "Dossier départ", "dossier_arrivee": "Dossier arrivée",
                         "ville_depart": "Ville départ", "cp_depart": "CP départ",
                         "ville_arrivee": "Ville arrivée", "cp_arrivee": "CP arrivée",
-                        "km_vide": "KM À Vide",
+                        "km_vide": "KM À Vide", "controle": "Contrôle",
                     }),
                     use_container_width=True,
                 )
