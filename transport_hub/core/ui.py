@@ -66,6 +66,8 @@ TOOLS = [
          icon="pie", cat="renta", desc="Lot sec ou groupage, km en route chaînée et km à vide par département."),
     dict(key="renta_benne", file="outils/renta_benne.py", title="Rentabilité benne", icon="truck", cat="renta",
          desc="Rotations benne : CA, km chargés, km à vide et rentabilité au kilomètre."),
+    dict(key="renta_plateau", file="outils/renta_plateau.py", title="Rentabilité plateau", icon="truck",
+         cat="renta", desc="Plannings plateau : tournées par tracteur, CA, km chargés et à vide, renta au km."),
     dict(key="crossdock", file="outils/crossdock.py", title="Plateforme cross-dock", icon="dock", cat="renta",
          desc="Où placer un quai de groupage : centre de gravité, détours, camions évités et bilan par site."),
     dict(key="txflex", file="outils/analyse_txflex.py", title="Analyse TX-FLEX", icon="gauge", cat="renta",
