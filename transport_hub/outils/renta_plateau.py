@@ -59,7 +59,7 @@ MAX_RETRIES  = 3
 RETRY_DELAY  = 2
 VEHICLE      = "EUR_TRAILER_TRUCK"
 
-RESULT_SCHEMA      = "plateau-v2"   # change → les résultats en session sont purgés
+RESULT_SCHEMA      = "plateau-v3"   # change → les résultats en session sont purgés
 SEUIL_ALERTE_VIDE  = 150            # km — trajet à vide signalé au-delà
 SEUIL_ECART_ODO    = 15             # % — écart compteur / PTV signalé au-delà (par camion)
 SEUIL_TEMPS_SITE   = 4.0            # h — temps sur site signalé au-delà
@@ -241,33 +241,118 @@ PLAN_COLS = {
 OBLIGATOIRES = ["dossier", "seq", "activite", "cp", "ville", "execution"]
 
 
-def parse_execution(txt: str):
+LONGUEUR_EXECUTION = 50     # Traject coupe la colonne Exécution à 50 caractères
+SEUIL_RESSOURCE_FICHIER = 0.6   # part des lignes où une ressource doit figurer pour « posséder » le fichier
+_RE_AFF = re.compile(r"^AFF-[A-Z0-9]+$", re.I)
+
+
+def _est_plaque(t: str) -> bool:
+    return bool(re.search(r"\d", t)) and len(t) >= 4 and not t.upper().startswith("AFF-")
+
+
+def decouper_execution(txt: str):
     """
-    'WM7434 EL-ABBADI QACF329' → tracteur WM7434, chauffeur EL-ABBADI, plateau QACF329.
-    Plaques = mots contenant un chiffre ; noms = les autres.
-    Plus d'un plateau ou d'un nom → accroche / décroche probable.
+    La colonne Exécution enchaîne une ou plusieurs ressources, parfois suivies
+    (ou précédées) du nom de la société affrétée :
+      'WM7434 EL-ABBADI QACF329'                          → tracteur propre
+      'AFF-CBFR LEDOUX QAJE768 CB FRANCE SAS'             → affrété : code AFF, chauffeur, plateau, société
+      'TRANSPORT DE LAIT BOUCHART AFF-TLB LAHAYE QAFY498' → société avant la ressource
+      'RJ8636 KRAJNAK MZ4772 CB FRANCE SAS AFF-CBFR LEDOU' → deux ressources (transbordement), texte coupé
+    Une ressource = tracteur (plaque ou code AFF-xxx) + chauffeur + plateau.
+    Clé : la plaque du tracteur ; pour un affrété, « code AFF + chauffeur »
+    (le code AFF est partagé par tous les chauffeurs d'une même société).
+    Retourne (ressources, sociétés, fragment) — fragment = début de ressource
+    coupé à 50 caractères (ex. 'AFF-CBFR LEDOU'), à comparer aux clés connues.
     """
-    toks = _clean(txt).split()
-    if not toks:
-        return "", "", "", False
-    is_plate = [bool(re.search(r"\d", t)) and len(t) >= 4 for t in toks]
-    tracteur = toks[0] if is_plate[0] else ""
-    groupes, cur = [], []
-    for t, p in zip(toks[1:] if tracteur else toks, is_plate[1:] if tracteur else is_plate):
-        if p:
-            if cur:
-                groupes.append(("nom", " ".join(cur)))
-                cur = []
-            groupes.append(("plaque", t))
+    s = _clean(txt)
+    toks = s.split()
+    tronque = len(s) >= LONGUEUR_EXECUTION
+    ressources, societes, buf, cur = [], [], [], None
+
+    def _fermer():
+        nonlocal cur
+        if cur:
+            ressources.append(cur)
+            cur = None
+
+    for t in toks:
+        aff = bool(_RE_AFF.match(t))
+        if aff or (_est_plaque(t) and (cur is None or cur["plateau"])):
+            _fermer()
+            if buf:
+                societes.append(" ".join(buf))
+                buf = []
+            cur = dict(tracteur=t.upper(), chauffeur="", plateau="", affrete=aff)
+        elif _est_plaque(t):
+            cur["plateau"] = t.upper()
+        elif cur is not None and not cur["plateau"]:
+            cur["chauffeur"] = f"{cur['chauffeur']} {t}".strip()
         else:
-            cur.append(t)
-    if cur:
-        groupes.append(("nom", " ".join(cur)))
-    noms = [g for k, g in groupes if k == "nom"]
-    plaques = [g for k, g in groupes if k == "plaque"]
-    chauffeur = noms[0] if noms else ""
-    accroche = len(noms) > 1 or len(plaques) > 1
-    return tracteur or (plaques[0] if plaques else ""), chauffeur, " / ".join(plaques), accroche
+            _fermer()
+            buf.append(t)
+    _fermer()
+
+    fragment = ""
+    if tronque and toks:
+        if buf:                                   # 'TRANSPORT DE LAIT BOUCHART A' → 'A' coupé
+            fragment = buf.pop()
+        elif ressources and not ressources[-1]["plateau"]:
+            r = ressources.pop()                  # 'AFF-CBFR LEDOU' → ressource incomplète
+            fragment = f"{r['tracteur']} {r['chauffeur']}".strip()
+    if buf:
+        societes.append(" ".join(buf))
+    for r in ressources:
+        r["cle"] = f"{r['tracteur']} {r['chauffeur']}".strip() if r["affrete"] else r["tracteur"]
+    return ressources, societes, fragment
+
+
+def affecter_ressources(rows: list):
+    """
+    Un export Traject = le planning d'UNE ressource (tracteur propre ou chauffeur affrété),
+    mais la colonne Exécution liste toutes les ressources du dossier (transbordement,
+    accroche / décroche). On cherche la ressource présente sur la majorité des lignes du
+    fichier : toutes les lignes lui sont attribuées. Sinon (fichier multi-tracteurs),
+    chaque ligne va à la première ressource lue.
+    """
+    compte = {}
+    for r in rows:
+        for c in dict.fromkeys(x["cle"] for x in r["_res"]):
+            compte[c] = compte.get(c, 0) + 1
+    if not compte:
+        return
+    # les fragments coupés comptent pour la clé qu'ils prolongent
+    for r in rows:
+        if r["_frag"]:
+            for c in compte:
+                if c.startswith(r["_frag"]) and not any(x["cle"] == c for x in r["_res"]):
+                    compte[c] += 1
+    principale = max(compte, key=lambda c: (compte[c], c))
+    proprio = compte[principale] >= SEUIL_RESSOURCE_FICHIER * len(rows)
+
+    ref = next(x for r in rows for x in r["_res"] if x["cle"] == principale)
+    soc = {}
+    for r in rows:
+        for s_ in r["_soc"]:
+            soc[s_] = soc.get(s_, 0) + 1
+    societe = max(soc, key=soc.get) if soc and ref["affrete"] else ""
+
+    for r in rows:
+        if proprio:
+            res = next((x for x in r["_res"] if x["cle"] == principale), ref)
+            autres = [x for x in r["_res"] if x["cle"] != principale]
+            r["tracteur"], r["chauffeur"] = principale, res["chauffeur"] or ref["chauffeur"]
+            r["plateau"], r["affrete"], r["societe"] = res["plateau"] or ref["plateau"], ref["affrete"], societe
+            r["accroche"] = bool(autres)
+            r["autres_ressources"] = ", ".join(f"{x['cle']} {x['chauffeur']}".strip() if not x["affrete"]
+                                               else x["cle"] for x in autres)
+        else:
+            res = r["_res"][0] if r["_res"] else None
+            r["tracteur"] = res["cle"] if res else ""
+            r["chauffeur"], r["plateau"] = (res["chauffeur"], res["plateau"]) if res else ("", "")
+            r["affrete"] = bool(res and res["affrete"])
+            r["societe"] = (r["_soc"][0] if r["_soc"] else "") if r["affrete"] else ""
+            r["accroche"] = len(r["_res"]) > 1
+            r["autres_ressources"] = ", ".join(x["cle"] for x in r["_res"][1:])
 
 
 def _pays_arret(cp, act, r):
@@ -278,7 +363,15 @@ def _pays_arret(cp, act, r):
         return po
     if c and c == _cp_norm(r.get("cp_dest")) and pd_:
         return pd_
-    guess = (po if act == "CH" else pd_) or po or pd_
+    if act not in ("CH", "DECH"):
+        # Arrêt au dépôt / reprise (ex. DO à Werbomont) : Origine et Destination
+        # sont celles du dossier, pas du lieu → on ne s'y fie pas.
+        brut = _clean(cp).upper()
+        if re.match(r"^L[\s\-]?\d{4}$", brut):
+            return "L"
+        guess = ""
+    else:
+        guess = (po if act == "CH" else pd_) or po or pd_
     digits = re.sub(r"\D", "", _clean(cp))
     if len(digits) == 5 and guess in ("B", "L", "NL", "A", "CH", ""):
         guess = "F"
@@ -309,7 +402,7 @@ def parse_planning(file, file_idx: int):
         r["dossier"] = re.sub(r"\.0+$", "", r["dossier"])
         act = r["activite"].upper()
         r["activite"] = "CH" if act.startswith("CH") else ("DECH" if act.startswith("DE") else act)
-        r["tracteur"], r["chauffeur"], r["plateau"], r["accroche"] = parse_execution(r["execution"])
+        r["_res"], r["_soc"], r["_frag"] = decouper_execution(r["execution"])
         r["pays"] = _pays_arret(r["cp"], r["activite"], r)
         r["cp"] = re.sub(r"\.0+$", "", r["cp"])
         r["seq_num"] = _to_float(r["seq"])
@@ -326,7 +419,22 @@ def parse_planning(file, file_idx: int):
         r["file_idx"] = file_idx
         r["ligne"] = int(i) + 2
         rows.append(r)
-    return pd.DataFrame(rows)
+    affecter_ressources(rows)
+    for r in rows:
+        for k in ("_res", "_soc", "_frag"):
+            r.pop(k, None)
+    df_out = pd.DataFrame(rows)
+    if df_out.empty:
+        return df_out
+    # Sans aucun pointage OB (cas des affrétés) : un arrêt est considéré réalisé
+    # dès que sa date planifiée est passée (aujourd'hui inclus).
+    df_out["sans_pointage"] = False
+    aujourd_hui = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
+    for tr, idx in df_out.groupby("tracteur").groups.items():
+        if not df_out.loc[idx, "realise"].any():
+            df_out.loc[idx, "sans_pointage"] = True
+            df_out.loc[idx, "realise"] = df_out.loc[idx, "ts_plan"].lt(aujourd_hui).fillna(False)
+    return df_out
 
 
 def ordonner(df: pd.DataFrame) -> pd.DataFrame:
@@ -362,7 +470,33 @@ def charger_plannings(files):
     n0 = len(df)
     df = df.drop_duplicates(subset=["tracteur", "dossier", "activite", "cp", "ville", "seq", "ts_plan"],
                             keep="first")
-    return ordonner(df.reset_index(drop=True)), erreurs, n0 - len(df)
+    return attribuer_roles(ordonner(df.reset_index(drop=True))), erreurs, n0 - len(df)
+
+
+def attribuer_roles(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rôle de chaque arrêt pour la cargaison à bord : CH (monte), DECH (descend), AUTRE.
+    Une activité autre que CH / DECH (ex. DO au dépôt de Werbomont) est une reprise
+    si le dossier n'est pas encore à bord et revient plus loin (le camion le récupère),
+    une dépose s'il est déjà à bord.
+    """
+    if df.empty:
+        return df
+    df["role"] = df["activite"].where(df["activite"].isin(["CH", "DECH"]), "AUTRE")
+    for tr, g in df.groupby("tracteur", sort=False):
+        g = g.sort_values("ordre")
+        vus = set()
+        idx, dos, act = list(g.index), list(g["dossier"]), list(g["activite"])
+        for k, (i, d, a) in enumerate(zip(idx, dos, act)):
+            if a == "CH":
+                vus.add(d)
+            elif a not in ("CH", "DECH") and d:
+                if d in vus:
+                    df.at[i, "role"] = "DECH"
+                elif d in dos[k + 1:]:
+                    df.at[i, "role"] = "CH"
+                    vus.add(d)
+    return df
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -420,8 +554,8 @@ def construire_trajets(stops: pd.DataFrame, reconstituer: bool = True):
         dernier_dech = {}
         premier = {}
         for k, r in enumerate(g):
-            premier.setdefault(r["dossier"], (k, r["activite"]))
-            if r["activite"] == "DECH":
+            premier.setdefault(r["dossier"], (k, r["role"]))
+            if r["role"] == "DECH":
                 dernier_dech[r["dossier"]] = k
 
         # Dossiers déjà à bord au début (chargés avant la période)
@@ -431,7 +565,7 @@ def construire_trajets(stops: pd.DataFrame, reconstituer: bool = True):
                                   detail="Dossier déchargé sans chargement dans le fichier — "
                                          + ("chargement reconstitué depuis Origine." if reconstituer
                                             else "km chargés incomplets.")))
-        if reconstituer and g and g[0]["activite"] == "DECH":
+        if reconstituer and g and g[0]["role"] == "DECH":
             r0 = g[0]
             o = _lieu(r0, "orig")
             if o[0] or o[1]:
@@ -445,15 +579,15 @@ def construire_trajets(stops: pd.DataFrame, reconstituer: bool = True):
         for k in range(len(g)):
             r = g[k]
             d = r["dossier"]
-            if r["activite"] == "CH":
+            if r["role"] == "CH":
                 a_bord.add(d)
-            elif r["activite"] == "DECH" and dernier_dech.get(d) == k:
+            elif r["role"] == "DECH" and dernier_dech.get(d) == k:
                 a_bord.discard(d)
                 dernier_livre = d
             if k == len(g) - 1:
                 break
             n = g[k + 1]
-            suiv = next((x["dossier"] for x in g[k + 1:] if x["activite"] == "CH"), "")
+            suiv = next((x["dossier"] for x in g[k + 1:] if x["role"] == "CH"), "")
             trajets.append(dict(
                 tracteur=tr, chauffeur=r["chauffeur"] or n["chauffeur"], ordre=k + 1, reconstitue=False,
                 de_nom=r["nom"], de=_lieu(r), de_act=r["activite"], de_ts=r["ts_dep"], de_odo=r["odo_km"],
@@ -577,11 +711,11 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
         poids=("poids_t", "max"),
         vente_planning=("vente", "first"),
         chargement=("ville", lambda s: " · ".join(dict.fromkeys(
-            stops.loc[s.index][stops.loc[s.index, "activite"] == "CH"]["ville"]))),
+            stops.loc[s.index][stops.loc[s.index, "role"] == "CH"]["ville"]))),
         dechargement=("ville", lambda s: " · ".join(dict.fromkeys(
-            stops.loc[s.index][stops.loc[s.index, "activite"] == "DECH"]["ville"]))),
-        nb_ch=("activite", lambda s: int((s == "CH").sum())),
-        nb_dech=("activite", lambda s: int((s == "DECH").sum())),
+            stops.loc[s.index][stops.loc[s.index, "role"] == "DECH"]["ville"]))),
+        nb_ch=("role", lambda s: int((s == "CH").sum())),
+        nb_dech=("role", lambda s: int((s == "DECH").sum())),
         date_debut=("ts_plan", "min"),
         realise=("realise", "all"),
     ).reset_index()
@@ -638,12 +772,24 @@ def synthese_flotte(stops, df_traj, dt, controles):
                                                  f"sur les arrêts réalisés ({ecart:+.1f} %)."))
         chauffeurs = list(dict.fromkeys(c for c in g.sort_values("ordre")["chauffeur"] if c))
         plateaux = list(dict.fromkeys(p for p in g.sort_values("ordre")["plateau"] if p))
-        if g["accroche"].any() or len(plateaux) > 1:
+        if len(plateaux) > 1:
             controles.append(dict(tracteur=tr, dossier="", type="Accroche / décroche",
-                                  detail=f"Plateaux : {', '.join(plateaux) or '—'} · "
+                                  detail=f"Plateaux : {', '.join(plateaux)} · "
                                          f"chauffeurs : {', '.join(chauffeurs) or '—'}."))
+        partages = g[g["accroche"]].groupby("dossier")["autres_ressources"].first()
+        for d, autres in partages.items():
+            controles.append(dict(tracteur=tr, dossier=d, type="Dossier partagé (transbordement)",
+                                  detail=f"Aussi exécuté par {autres or 'une autre ressource'}. Sans le planning "
+                                         f"de cette ressource, tout le CA du dossier reste sur {tr}."))
+        if g["sans_pointage"].any():
+            controles.append(dict(tracteur=tr, dossier="", type="Sans pointage OB",
+                                  detail="Aucun pointage ni relevé compteur (affrété) : arrêts considérés réalisés "
+                                         "d'après la date planifiée, km uniquement via PTV."))
+        affrete = bool(g["affrete"].any())
+        societe = next((s for s in g["societe"] if s), "")
         lignes.append(dict(
-            tracteur=tr, chauffeurs=", ".join(chauffeurs), plateaux=", ".join(plateaux),
+            tracteur=tr, type_ressource=("Affrété" if affrete else "Tracteur"), societe=societe,
+            chauffeurs=", ".join(chauffeurs), plateaux=", ".join(plateaux),
             debut=g["ts_plan"].min(), fin=g["ts_plan"].max(), jours=jours,
             dossiers=g["dossier"].nunique(), arrets=len(g), ca=round(ca, 2),
             km_charge=round(km_tot - km_vide, 1), km_vide=round(km_vide, 1), km_total=round(km_tot, 1),
@@ -661,7 +807,8 @@ def synthese_flotte(stops, df_traj, dt, controles):
 # ══════════════════════════════════════════════════════════════════
 
 COLS_FLOTTE = {
-    "tracteur": "Tracteur", "chauffeurs": "Chauffeur(s)", "plateaux": "Plateau(x)",
+    "tracteur": "Tracteur / ressource", "type_ressource": "Type", "societe": "Société affrétée",
+    "chauffeurs": "Chauffeur(s)", "plateaux": "Plateau(x)",
     "jours": "Jours", "dossiers": "Dossiers", "ca": "CA (€)", "km_charge": "KM chargés",
     "km_vide": "KM à vide", "km_total": "KM total", "pct_vide": "% vide", "renta": "Renta €/km",
     "ca_jour": "CA / jour (€)", "sans_ca": "Dossiers sans CA", "km_compteur": "KM compteur", "ecart_compteur": "Écart compteur (%)",
@@ -1005,6 +1152,7 @@ function drawRank(){
   const bd=[]; if(f.sans_ca) bd.push(`<span class="b o">${f.sans_ca} sans CA</span>`);
   if(f.ecart_compteur!=null && Math.abs(f.ecart_compteur)>D.seuils.odo) bd.push(`<span class="b r">cpt ${f.ecart_compteur>0?'+':''}${nf1.format(f.ecart_compteur)} %</span>`);
   if((f.plateaux||'').includes(',')) bd.push(`<span class="b p">accroche</span>`);
+  if(f.type_ressource==='Affrété') bd.push(`<span class="b n">${esc(f.societe||'affrété')}</span>`);
   h+=`<div class="rank" data-tr="${esc(f.tracteur)}"><div class="n">${i+1}</div>
    <div class="tr"><b>${esc(f.tracteur)}</b><span>${esc(f.chauffeurs||'—')}</span></div>
    <div class="num renta ${cls}">${r3(f.renta)}</div>
@@ -1165,7 +1313,7 @@ def main():
     if not files_pl:
         st.markdown(
             '<ul class="ap-list">'
-            '<li><b>1. Plannings</b> <span>— exports Traject, un par tracteur ou plusieurs pour le même.</span></li>'
+            '<li><b>1. Plannings</b> <span>— exports Traject, un par tracteur ou chauffeur affrété (AFF-xxx), ou plusieurs pour le même.</span></li>'
             '<li><b>2. CA</b> <span>— export habituel, jointure sur le N° dossier.</span></li>'
             '<li><b>3. Contrôle</b> <span>— tracteurs détectés, chauffeurs, plateaux, dossiers incomplets.</span></li>'
             '<li><b>4. Calcul PTV</b> <span>— km par trajet, imputation chargé / vide / groupage.</span></li>'
@@ -1240,15 +1388,18 @@ def main():
         st.warning("Aucun arrêt dans le périmètre choisi.")
         return
 
-    with st.expander("Tracteurs détectés"):
+    with st.expander("Tracteurs et affrétés détectés"):
         det = sel.sort_values("ordre").groupby("tracteur").agg(
+            type_ressource=("affrete", lambda s: "Affrété" if s.any() else "Tracteur"),
+            societe=("societe", lambda s: next((x for x in s if x), "")),
             chauffeurs=("chauffeur", lambda s: ", ".join(dict.fromkeys(x for x in s if x))),
             plateaux=("plateau", lambda s: ", ".join(dict.fromkeys(x for x in s if x))),
             fichiers=("fichier", lambda s: ", ".join(dict.fromkeys(s))),
             arrets=("dossier", "size"), dossiers=("dossier", "nunique"),
             debut=("ts_plan", "min"), fin=("ts_plan", "max")).reset_index()
         st.dataframe(det, hide_index=True, use_container_width=True, column_config={
-            "tracteur": "Tracteur", "chauffeurs": "Chauffeur(s)", "plateaux": "Plateau(x)",
+            "tracteur": "Tracteur / ressource", "type_ressource": "Type", "societe": "Société affrétée",
+            "chauffeurs": "Chauffeur(s)", "plateaux": "Plateau(x)",
             "fichiers": "Fichier(s)", "arrets": "Arrêts", "dossiers": "Dossiers",
             "debut": st.column_config.DatetimeColumn("Début", format="DD/MM/YY"),
             "fin": st.column_config.DatetimeColumn("Fin", format="DD/MM/YY")})
