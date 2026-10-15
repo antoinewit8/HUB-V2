@@ -723,6 +723,7 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
         nb_ch=("role", lambda s: int((s == "CH").sum())),
         nb_dech=("role", lambda s: int((s == "DECH").sum())),
         date_debut=("ts_plan", "min"),
+        premier_arret=("ordre", "min"),
         realise=("realise", "all"),
     ).reset_index()
     dt = dt.merge(info, on=["tracteur", "dossier"], how="left")
@@ -851,6 +852,9 @@ def export_excel(df_flotte, df_dos, df_traj, df_ctrl):
                               ("Trajets", _traj_affichage(df_traj), COLS_TRAJETS), ("Contrôles", df_ctrl, COLS_CTRL)]:
             if df is None or df.empty:
                 continue
+            if nom == "Dossiers" and "premier_arret" in df.columns:
+                # Ordre de la tournée : par tracteur, puis par premier arrêt du dossier
+                df = df.sort_values(["tracteur", "premier_arret", "dossier"], kind="stable")
             c = [k for k in cols if k in df.columns]
             x = df[c].rename(columns=cols).copy()
             for col in x.columns:
