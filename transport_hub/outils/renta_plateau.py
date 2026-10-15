@@ -184,7 +184,8 @@ def geocode_stop(ville: str, cp: str, pays: str):
         if r:
             return r
     for q in ([f"{ville}, {cp}, {full}"] if ville and cp and full else []) + \
-             ([f"{ville}, {full}"] if ville and full else []) + ([ville] if ville else []):
+             ([f"{ville}, {full}"] if ville and full else []) + \
+             ([f"{cp} {ville}"] if ville and cp and not full else []) + ([ville] if ville else []):
         r = _first_pos(_ptv_get(f"{GEOCODE_URL}/locations/by-text", {"searchText": q}))
         if r:
             return r
@@ -478,20 +479,25 @@ def attribuer_roles(df: pd.DataFrame) -> pd.DataFrame:
     Rôle de chaque arrêt pour la cargaison à bord : CH (monte), DECH (descend), AUTRE.
     Une activité autre que CH / DECH (ex. DO au dépôt de Werbomont) est une reprise
     si le dossier n'est pas encore à bord et revient plus loin (le camion le récupère),
-    une dépose s'il est déjà à bord.
+    une dépose s'il est déjà à bord. Après le dernier déchargement du dossier
+    (ex. DCR = décrochage), elle reste neutre.
     """
     if df.empty:
         return df
     df["role"] = df["activite"].where(df["activite"].isin(["CH", "DECH"]), "AUTRE")
     for tr, g in df.groupby("tracteur", sort=False):
         g = g.sort_values("ordre")
-        vus = set()
+        vus, livres = set(), set()
         idx, dos, act = list(g.index), list(g["dossier"]), list(g["activite"])
         for k, (i, d, a) in enumerate(zip(idx, dos, act)):
             if a == "CH":
                 vus.add(d)
+            elif a == "DECH":
+                livres.add(d)
             elif a not in ("CH", "DECH") and d:
-                if d in vus:
+                if d in livres and d not in dos[k + 1:]:
+                    pass                      # ex. DCR après le déchargement : rien à bord, arrêt neutre
+                elif d in vus:
                     df.at[i, "role"] = "DECH"
                 elif d in dos[k + 1:]:
                     df.at[i, "role"] = "CH"
