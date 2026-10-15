@@ -20,8 +20,8 @@ Logique :
        – chargé (un dossier à bord)  → imputé à ce dossier ;
        – groupage (plusieurs)        → parts égales (provisoire).
   3. Lavage après chaque déchargement : un lavage est compté pour chaque dossier
-     dont le dernier déchargement est dans la période. Son coût = colonne
-     Suppléments du fichier CA (à défaut, un forfait réglable). L'arrêt lavage
+     dont le dernier déchargement est dans la période. Son coût = code LAO de
+     la colonne Vente du planning, à défaut Suppléments du CA, puis un forfait réglable. L'arrêt lavage
      est repéré dans le planning (activité LAV… ou nom de station) ; s'il n'y
      figure pas, le lavage est supposé fait sur place (usine / laiterie) : coût
      compté, pas de détour.
@@ -65,7 +65,7 @@ MAX_RETRIES  = 3
 RETRY_DELAY  = 2
 VEHICLE      = "EUR_TRAILER_TRUCK"
 
-RESULT_SCHEMA      = "citerne-v2"   # change → les résultats en session sont purgés
+RESULT_SCHEMA      = "citerne-v3"   # change → les résultats en session sont purgés
 SEUIL_ALERTE_VIDE  = 150            # km — trajet à vide signalé au-delà
 SEUIL_ECART_ODO    = 15             # % — écart compteur / PTV signalé au-delà (par camion)
 SEUIL_TEMPS_SITE   = 4.0            # h — temps sur site signalé au-delà
@@ -97,8 +97,8 @@ COUT_LAVAGE_DEFAUT = 0.0            # € — forfait si aucun coût trouvé pou
 CODES_LAVAGE = ("LAO",)             # code du lavage dans la colonne Vente du planning
 CODES_PRIX = ("TRO", "FOR", "GA3", "GA2", "GA1", "SG")   # prix transport / gasoil : pas des suppléments
 SOURCES_COUT = {
-    "ca":    "Suppléments du fichier CA",
     "vente": "Code LAO de la colonne Vente (planning)",
+    "ca":    "Suppléments du fichier CA",
 }
 _RE_ACT_LAVAGE = re.compile(r"^(LAV|NET|WAS|REIN|CLEAN|SPOEL)", re.I)
 _RE_NOM_LAVAGE = re.compile(
@@ -753,7 +753,7 @@ def imputer(trajets, convention: str):
 
 
 def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocoder=None, distance=None,
-             cout_lavage_defaut=COUT_LAVAGE_DEFAUT, ca_a_supplements=True, source_cout="ca"):
+             cout_lavage_defaut=COUT_LAVAGE_DEFAUT, ca_a_supplements=True, source_cout="vente"):
     geocoder = geocoder or geocode_stop
     distance = distance or route_km
     trajets, controles, lavages = construire_trajets(stops, reconstituer)
@@ -825,10 +825,14 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
     vente = st_dos.groupby("dossier")["vente"].first().map(parse_vente) if not st_dos.empty else pd.Series(dtype=object)
     lao = dt["dossier"].map(lambda d: sum(vente.get(d, {}).get(c, 0.0) for c in CODES_LAVAGE))
     sup = dt["dossier"].map(lambda d: ca_dict.get(d, {}).get("supplements", 0.0) or 0.0)
+    # Suppléments CA = lavage + autres frais (TRPO, SWO…) : on retire ceux que la vente du planning détaille
+    autres = dt["dossier"].map(lambda d: sum(v for c, v in vente.get(d, {}).items()
+                                             if c not in CODES_PRIX + CODES_LAVAGE))
+    sup_lav = (sup - autres).where(sup - autres > 0.5, 0.0)
     dt["lavage_vente"] = lao.round(2)
     dt["supplements_ca"] = sup.where(dt["ca_trouve"]).round(2)
-    ordre_src = [("ca", sup, "Suppléments CA"), ("vente", lao, "LAO planning")]
-    if source_cout == "vente":
+    ordre_src = [("vente", lao, "LAO planning"), ("ca", sup_lav, "Suppléments CA")]
+    if source_cout == "ca":
         ordre_src.reverse()
     dt["cout_lavage"] = 0.0
     dt["source_lavage"] = ""
@@ -841,16 +845,16 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
     dt.loc[reste, "cout_lavage"] = float(cout_lavage_defaut or 0.0)
     dt.loc[reste, "source_lavage"] = "Forfait" if cout_lavage_defaut else "Inconnu"
     dt["cout_lavage"] = dt["cout_lavage"].round(2)
-    # Suppléments CA qui contiennent sans doute autre chose que le lavage
+    # Suppléments retenus alors que la vente détaille d'autres frais : à vérifier
     for r in dt[a_lav & (dt["source_lavage"] == "Suppléments CA")].itertuples():
-        autres = {c: v for c, v in vente.get(r.dossier, {}).items() if c not in CODES_PRIX + CODES_LAVAGE}
-        if autres:
+        det = {c: v for c, v in vente.get(r.dossier, {}).items() if c not in CODES_PRIX + CODES_LAVAGE}
+        if det:
             controles.append(dict(
-                tracteur=r.tracteur, dossier=r.dossier, type="Suppléments CA mélangés",
-                detail=f"Suppléments {_fmt_eur(r.supplements_ca)} ; la vente du planning contient aussi "
-                       + ", ".join(f"{c} {v:,.2f}".replace(",", " ") for c, v in autres.items())
-                       + (f" en plus du lavage LAO {_fmt_eur(r.lavage_vente)}" if r.lavage_vente else "")
-                       + " : coût du lavage peut-être surestimé."))
+                tracteur=r.tracteur, dossier=r.dossier, type="Lavage déduit des suppléments",
+                detail=("Pas de LAO au planning : " if not r.lavage_vente else "")
+                       + f"lavage = suppléments CA {_fmt_eur(r.supplements_ca)} moins "
+                       + ", ".join(f"{c} {v:,.2f}".replace(",", " ") for c, v in det.items())
+                       + f" = {_fmt_eur(r.cout_lavage)}."))
 
     # CA net des lavages (sans CA connu, le lavage reste affiché mais n'est pas déduit d'un CA à 0)
     dt["ca"] = np.where(dt["ca_trouve"], dt["ca_brut"] - dt["cout_lavage"], 0.0).round(2)
@@ -895,7 +899,7 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
     for r in dt[dt["source_lavage"].isin(["Forfait", "Inconnu"])].itertuples():
         controles.append(dict(
             tracteur=r.tracteur, dossier=r.dossier, type="Lavage sans coût",
-            detail=(f"Lavage ({r.lavage}) sans suppléments CA ni code LAO : "
+            detail=(f"Lavage ({r.lavage}) sans code LAO au planning ni suppléments de lavage dans le CA : "
                     + ("forfait de " + _fmt_eur(cout_lavage_defaut) + " appliqué." if r.source_lavage == "Forfait"
                        else "compté à 0 € (réglez un forfait si besoin)."))))
 
@@ -1486,14 +1490,14 @@ def main():
                                     key="rc_up_pl", label_visibility="collapsed")
     with c2:
         st.markdown("#### Fichier CA")
-        st.caption("N° Dossier · Total des ventes · Suppléments (coût des lavages) · Client facturation · Etat vente")
+        st.caption("N° Dossier · Total des ventes · Suppléments (lavage si pas de LAO au planning) · Client facturation · Etat vente")
         file_ca = st.file_uploader("CA (.xlsx)", type=["xlsx"], key="rc_up_ca", label_visibility="collapsed")
 
     if not files_pl:
         st.markdown(
             '<ul class="ap-list">'
             '<li><b>1. Plannings</b> <span>— exports Traject, un par tracteur ou chauffeur affrété (AFF-xxx), ou plusieurs pour le même.</span></li>'
-            '<li><b>2. CA</b> <span>— export habituel, jointure sur le N° dossier ; Suppléments = coût du lavage.</span></li>'
+            '<li><b>2. CA</b> <span>— export habituel, jointure sur le N° dossier ; lavage = code LAO du planning, sinon Suppléments.</span></li>'
             '<li><b>3. Contrôle</b> <span>— tracteurs détectés, chauffeurs, citernes, arrêts lavage, dossiers incomplets.</span></li>'
             '<li><b>4. Calcul PTV</b> <span>— km par trajet, imputation chargé / vers lavage / vide / groupage.</span></li>'
             '<li><b>5. Résultats</b> <span>— flotte, tournée par camion, dossiers, contrôles, export Excel.</span></li>'
@@ -1550,7 +1554,7 @@ def main():
     source_cout = st.radio("Coût du lavage pris d'abord dans", list(SOURCES_COUT), format_func=SOURCES_COUT.get,
                            horizontal=True,
                            help="L'autre source sert de secours, puis le forfait. Les Suppléments du CA peuvent "
-                                "contenir d'autres frais (TRPO, SWO…) : un contrôle les signale.")
+                                "contenir d’autres frais (TRPO, SWO…) : ceux détaillés dans la vente du planning sont retirés.")
 
     sel = stops.copy()
     if periode and isinstance(periode, (tuple, list)) and len(periode) == 2:
@@ -1630,7 +1634,7 @@ def main():
     meta = dict(
         periode=(f"{d0:%d/%m/%Y} → {d1:%d/%m/%Y}" if pd.notna(d0) and pd.notna(d1) else ""),
         convention="Vide imputé au " + CONVENTIONS_VIDE.get(conv, conv).lower() + " · lavages déduits du CA ("
-                   + SOURCES_COUT.get(st.session_state["rc_res"].get("source_cout", "ca"), "").lower() + ")",
+                   + SOURCES_COUT.get(st.session_state["rc_res"].get("source_cout", "vente"), "").lower() + ")",
         genere=st.session_state["rc_res"].get("genere", ""),
     )
     page_html = construire_tableau_de_bord(df_flotte, df_dos, df_traj, df_ctrl, sel_c, meta)
