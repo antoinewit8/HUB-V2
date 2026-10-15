@@ -494,12 +494,14 @@ def attribuer_roles(df: pd.DataFrame) -> pd.DataFrame:
                 vus.add(d)
             elif a == "DECH":
                 livres.add(d)
-            elif a not in ("CH", "DECH") and d:
+            elif a not in ("CH", "DECH", "LAV") and d:
                 if d in livres and d not in dos[k + 1:]:
                     pass                      # ex. DCR après le déchargement : rien à bord, arrêt neutre
                 elif d in vus:
                     df.at[i, "role"] = "DECH"
-                elif d in dos[k + 1:]:
+                elif any(d2 == d and a2 not in ("CH", "LAV") for d2, a2 in zip(dos[k + 1:], act[k + 1:])):
+                    # Reprise seulement si le dossier est réellement déchargé / déposé plus loin.
+                    # Un accrochage (ACR) suivi d'un simple lavage = citerne vide qu'on emmène laver.
                     df.at[i, "role"] = "CH"
                     vus.add(d)
     return df

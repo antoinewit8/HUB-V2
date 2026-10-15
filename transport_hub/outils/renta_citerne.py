@@ -558,7 +558,9 @@ def attribuer_roles(df: pd.DataFrame) -> pd.DataFrame:
                     pass                      # ex. DCR après le déchargement : rien à bord, arrêt neutre
                 elif d in vus:
                     df.at[i, "role"] = "DECH"
-                elif d in dos[k + 1:]:
+                elif any(d2 == d and a2 not in ("CH", "LAV") for d2, a2 in zip(dos[k + 1:], act[k + 1:])):
+                    # Reprise seulement si le dossier est réellement déchargé / déposé plus loin.
+                    # Un accrochage (ACR) suivi d'un simple lavage = citerne vide qu'on emmène laver.
                     df.at[i, "role"] = "CH"
                     vus.add(d)
     return df
@@ -662,6 +664,13 @@ def construire_trajets(stops: pd.DataFrame, reconstituer: bool = True):
                 dernier_livre = d
                 a_laver.append(d)
             elif r["role"] == "LAV":
+                # Une citerne au lavage est vide : rien ne peut rester à bord
+                if a_bord:
+                    for x in sorted(a_bord):
+                        controles.append(dict(tracteur=tr, dossier=x, type="Encore à bord au lavage",
+                                              detail=f"Dossier sans déchargement avant le lavage à {r['ville']} : "
+                                                     "considéré comme vidé à ce moment."))
+                    a_bord.clear()
                 # Traject met sur l'arrêt LAV le n° du dossier déchargé : il fait foi
                 cibles = (list(dict.fromkeys(a_laver + [d])) if d else
                           (a_laver or ([dernier_livre] if dernier_livre else [])))
