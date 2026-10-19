@@ -179,6 +179,7 @@ def stations_pays(cc: str) -> dict:
             "t": t.get("phone") or t.get("contact:phone") or "",
             "w": t.get("website") or t.get("contact:website") or "",
             "id": f"{el.get('type', 'node')}/{el.get('id')}",
+            "src": "osm",
             "_nt": len(t),
         })
     return {"stations": dedoublonner(out), "osm": (data.get("osm3s") or {}).get("timestamp_osm_base", "")}
@@ -203,6 +204,133 @@ def dedoublonner(stations: list) -> list:
     for d in gardees:
         d.pop("_nt", None)
     return gardees
+
+
+# ─── Liste officielle Circle K (API du localisateur de circlek.lu) ──────────
+# Ancien réseau TotalEnergies racheté par Couche-Tard (Circle K) en 2024 :
+# Allemagne et Pays-Bas vendus entièrement ; Belgique et Luxembourg en coentreprise,
+# boutique Circle K mais pompes sous marque TotalEnergies pendant cinq ans.
+CK_API = "https://api.circlek.com/eu/ngrp-tardmap-store-locator/api/v4/pois"
+CK_PAYS = {"BE", "LU", "NL", "DE"}
+CK_POMPE_TOTAL = {"BE", "LU"}
+CK_HEADERS = {**UA, "Accept": "application/json", "Origin": "https://www.circlek.lu", "Referer": "https://www.circlek.lu/"}
+
+
+def _get(url: str, headers: dict, timeout: int = 60) -> bytes:
+    with ureq.urlopen(ureq.Request(url, headers=headers), timeout=timeout) as r:
+        return r.read()
+
+
+def _cp_ville(a, b):
+    """L'API inverse parfois code postal et localité : on remet chaque valeur à sa place."""
+    a, b = (a or "").strip(), (b or "").strip()
+    if re.search(r"\d", a) and not re.search(r"\d", b):
+        return a, b
+    if re.search(r"\d", b) and not re.search(r"\d", a):
+        return b, a
+    return a, b
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def circlek_officiel() -> list:
+    """Toutes les stations du localisateur officiel Circle K (BE, LU, NL, DE). Lève une erreur si l'API ne répond pas."""
+    q = uparse.urlencode({
+        "withDetails": "true", "startLatitude": 50.5, "startLongitude": 6.0, "searchLatitude": 50.5,
+        "searchLongitude": 6.0, "maxDistance": 0, "maxPoints": 10000, "filterMode": "API_ITEMS",
+        "requireAllFilterItems": "true",
+    })
+    data = json.loads(_get(f"{CK_API}?{q}", CK_HEADERS).decode("utf-8"))
+    if not isinstance(data, list) or not data:
+        raise RuntimeError("réponse vide")
+    out = []
+    for p in data:
+        cc = (p.get("country") or "").upper()
+        la, lo = p.get("latitude"), p.get("longitude")
+        if cc not in CK_PAYS or la is None or lo is None:
+            continue
+        cp, ville = _cp_ville(p.get("city"), p.get("zip"))
+        marque = (p.get("brand") or "").upper()
+        fuel = next((h for h in p.get("schedule") or [] if h.get("type") == "openingTimesFuel"), {})
+        h24 = bool(fuel.get("isAlwaysOpen"))
+        horaires = "" if h24 else "; ".join(f"{k} {fuel[k]}" for k in ("weekdays", "Saturday", "Sunday") if fuel.get(k))
+        horaires = horaires.replace("weekdays", "Lu-Ve").replace("Saturday", "Sa").replace("Sunday", "Di")
+        total = cc in CK_POMPE_TOTAL
+        enseigne_txt = "TotalEnergies (boutique Circle K)" if total else "Circle K (ex-TotalEnergies)"
+        if marque == "CKAUTOMAT":
+            enseigne_txt += " · automate"
+        if marque == "TRUCK":
+            enseigne_txt = "Circle K Truck"
+        out.append({
+            "r": "total" if total and marque != "TRUCK" else "circlek",
+            "e": enseigne_txt,
+            "n": (p.get("name") or "").title(),
+            "a": p.get("add1") or "",
+            "cp": cp, "v": ville.title() if ville.isupper() else ville, "p": cc,
+            "la": round(float(la), 6), "lo": round(float(lo), 6),
+            "pl": 1 if marque == "TRUCK" else None, "ad": None, "lng": None, "cng": None,
+            "h": "24/7" if h24 else horaires,
+            "t": p.get("phone") or "", "w": "",
+            "id": "", "code": str(p.get("code") or ""), "src": "officiel",
+        })
+    return out
+
+
+@st.cache_data(ttl=7 * 86400, show_spinner=False)
+def circlek_lu_services() -> dict:
+    """Services des fiches circlek.lu (Pompe PL, Adblue truck, parking camion), par nom de station normalisé."""
+    page = _get("https://www.circlek.lu/fr/stations", UA).decode("utf-8", "replace")
+    slugs = sorted(set(re.findall(r'href="/fr/station/([a-z0-9\-]+)"', page)))
+    out = {}
+    for slug in slugs:
+        try:
+            html_ = _get(f"https://www.circlek.lu/fr/station/{slug}", UA, timeout=30).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            continue
+        texte = re.sub(r"<[^>]+>", " ", html_)
+        titre = re.search(r"<h1[^>]*>(.*?)</h1>", html_, re.S)
+        nom = norm(re.sub(r"<[^>]+>", " ", titre.group(1))) if titre else norm(slug.replace("-", " "))
+        out[nom] = {
+            "pl": 1 if re.search(r"Pompe PL", texte) else None,
+            "ad": 1 if re.search(r"Adblue truck", texte, re.I) else None,
+            "parking": bool(re.search(r"Parking camion", texte, re.I)),
+            "w": f"https://www.circlek.lu/fr/station/{slug}",
+        }
+    if not out:
+        raise RuntimeError("aucune fiche lue")
+    return out
+
+
+def fusionner_officiel(osm: list, officiel: list, pays: set) -> tuple[list, int]:
+    """Dans les pays couverts par la liste officielle, les stations TotalEnergies / Circle K d'OSM situées à
+    moins de 250 m d'une station officielle sont remplacées par elle (en lui passant les infos PL, AdBlue…
+    qu'OSM connaît). Les autres restent, marquées « OSM, absente de la liste officielle »."""
+    grille = {}
+    for o in officiel:
+        grille.setdefault((round(o["la"] * 50), round(o["lo"] * 30)), []).append(o)
+    gardees, fusion = [], 0
+    for s in osm:
+        if s["p"] not in pays or s["r"] == "as24":
+            gardees.append(s)
+            continue
+        cle = (round(s["la"] * 50), round(s["lo"] * 30))
+        proche, dmin = None, 1e9
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for o in grille.get((cle[0] + dx, cle[1] + dy), []):
+                    d = ((o["la"] - s["la"]) * 111) ** 2 + ((o["lo"] - s["lo"]) * 71) ** 2
+                    if d < dmin:
+                        proche, dmin = o, d
+        if proche is not None and dmin <= 0.25 ** 2:
+            for k in ("pl", "ad", "lng", "cng"):
+                if proche.get(k) is None and s.get(k) is not None:
+                    proche[k] = s[k]
+            if not proche["id"]:
+                proche["id"] = s["id"]
+            fusion += 1
+        else:
+            s = {**s, "src": "osm_hors"}
+            gardees.append(s)
+    return gardees + [o for o in officiel if o["p"] in pays], fusion
 
 
 # ─── Frontières (même source que Lavages citernes) ───────────────────────────
@@ -441,6 +569,10 @@ td a { color: #0066cc; text-decoration: none; }
 .pp.best { width: 32px; height: 32px; font-size: 14px; line-height: 28px; box-shadow: 0 0 0 4px rgba(255,255,255,.55), 0 2px 10px rgba(0,0,0,.5); }
 .pp .pl { position: absolute; right: -9px; bottom: -6px; background: #1d1d1f; color: #fff; border: 1.5px solid #fff;
   border-radius: 6px; font: 700 8px/11px var(--font); padding: 0 3px; letter-spacing: .02em; }
+.pp.doute { opacity: .55; border-style: dashed; }
+.src-off { color: #00873c; font-weight: 600; }
+.src-osm { color: var(--sub); }
+.src-hors { color: #b45a00; font-weight: 600; }
 .cb-centre { width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%;
   border: 5px solid #e53935; background: rgba(255,255,255,.95); box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,.45); }
 
@@ -506,6 +638,7 @@ td a { color: #0066cc; text-decoration: none; }
       <label class="row"><span class="nm">Accès poids lourds confirmé</span><span class="sw"><input type="checkbox" id="f-pl"><span></span></span></label>
       <label class="row"><span class="nm">AdBlue à la pompe</span><span class="sw"><input type="checkbox" id="f-ad"><span></span></span></label>
       <label class="row"><span class="nm">Ouvert 24 h/24</span><span class="sw"><input type="checkbox" id="f-24"><span></span></span></label>
+      <label class="row" id="row-hors"><span class="nm">Masquer les non confirmées</span><span class="sw"><input type="checkbox" id="f-hors"><span></span></span></label>
     </div>
     <p class="hint">Ces informations viennent d’OpenStreetMap et sont souvent absentes : un filtre actif masque aussi les stations non renseignées.</p>
   </div>
@@ -574,7 +707,7 @@ const FONDS = {
 const MAX_BADGES = 400, MAX_LIGNES = 600;
 
 const state = { res: Object.fromEntries(RES_ORDRE.map(r => [r, true])), center: null, rayon: 30, fond: 'Satellite',
-                borders: true, hors: true, pl: false, ad: false, h24: false, sort: { key: 'dist', dir: 1 }, filtre: '',
+                borders: true, hors: true, pl: false, ad: false, h24: false, sansDoute: false, sort: { key: 'dist', dir: 1 }, filtre: '',
                 proches: [], best: {} };
 const $ = id => document.getElementById(id);
 
@@ -595,7 +728,11 @@ function lieu(s) { return [s.cp, s.v].filter(Boolean).join(' '); }
 function plTxt(v) { return v === 1 ? 'Confirmé' : v === 0 ? 'Interdit' : 'Non renseigné'; }
 function divIcon(html) { return L.divIcon({ className: 'cb-icon', html, iconSize: [0, 0], iconAnchor: [0, 0] }); }
 ST.forEach((s, i) => { s.i = i; s.h24 = (s.h || '').trim() === '24/7'; s._nn = nn(`${s.n} ${s.v} ${s.cp}`); });
-const vis = s => state.res[s.r] && (!state.pl || s.pl === 1) && (!state.ad || s.ad === 1) && (!state.h24 || s.h24);
+const vis = s => state.res[s.r] && (!state.pl || s.pl === 1) && (!state.ad || s.ad === 1) && (!state.h24 || s.h24)
+  && (!state.sansDoute || s.src !== 'osm_hors');
+const SRC = { officiel: ['src-off', 'Liste officielle Circle K'], osm: ['src-osm', 'OpenStreetMap'],
+              osm_hors: ['src-hors', 'OpenStreetMap, absente de la liste officielle'] };
+const N_HORS = ST.filter(s => s.src === 'osm_hors').length;
 
 // ── Carte ──
 const map = L.map('map', { zoomControl: false, worldCopyJump: true, preferCanvas: false }).setView([49.8, 5.5], 6);
@@ -639,9 +776,11 @@ function popup(s) {
   if (s.h && !s.h24) l.push(`Horaires : ${esc(s.h)}`);
   if (s.t) l.push(`Tél. ${esc(s.t)}`);
   if (s.dist != null) l.push(`À ${km(s.dist)} km à vol d’oiseau`);
+  const src = SRC[s.src] || SRC.osm;
+  l.push(`<span class="${src[0]}">Source : ${src[1]}</span>`);
   const liens = [`<a href="${iti(s)}" target="_blank" rel="noopener">${state.center ? 'Itinéraire depuis le centre' : 'Ouvrir dans Google Maps'}</a>`];
-  if (s.w) liens.push(`<a href="${esc(s.w)}" target="_blank" rel="noopener">Site</a>`);
-  liens.push(`<a href="https://www.openstreetmap.org/${esc(s.id)}" target="_blank" rel="noopener">Fiche OSM</a>`);
+  if (s.w) liens.push(`<a href="${esc(s.w)}" target="_blank" rel="noopener">${s.src === 'officiel' ? 'Fiche Circle K' : 'Site'}</a>`);
+  if (s.id) liens.push(`<a href="https://www.openstreetmap.org/${esc(s.id)}" target="_blank" rel="noopener">Fiche OSM</a>`);
   l.push(liens.join(' · '));
   return l.join('<br>');
 }
@@ -653,7 +792,7 @@ function renderDots() {
     const n = ST.filter(vis).length, rad = n > 4000 ? 3.5 : 4.5;
     ST.forEach(s => {
       if (!vis(s)) return;
-      const m = L.circleMarker([s.la, s.lo], { renderer: canvas, radius: rad, color: '#fff', weight: 1.2, fillColor: RES[s.r].c, fillOpacity: .95, bubblingMouseEvents: false })
+      const m = L.circleMarker([s.la, s.lo], { renderer: canvas, radius: rad, color: '#fff', weight: 1.2, fillColor: RES[s.r].c, fillOpacity: s.src === 'osm_hors' ? .45 : .95, bubblingMouseEvents: false })
         .bindTooltip(() => `${esc(s.n)} (${esc(s.v || PAYS[s.p] || s.p)})`).bindPopup(() => popup(s), { maxWidth: 320 });
       dots.addLayer(m); mk['s' + s.i] = m;
     });
@@ -685,7 +824,7 @@ function renderZone() {
     Object.values(state.best).forEach(s => { if (!dejaLa.has(s.i)) { badges.push(s); dejaLa.add(s.i); } });
     badges.reverse().forEach(s => {
       const r = RES[s.r], best = bestIds.has(s.i);
-      const html = `<div class="pp${best ? ' best' : ''}" style="--c:${r.c}">${r.k}${s.pl === 1 ? '<span class="pl">PL</span>' : ''}</div>`;
+      const html = `<div class="pp${best ? ' best' : ''}${s.src === 'osm_hors' ? ' doute' : ''}" style="--c:${r.c}">${r.k}${s.pl === 1 ? '<span class="pl">PL</span>' : ''}</div>`;
       const m = L.marker([s.la, s.lo], { icon: divIcon(html), riseOnHover: true, zIndexOffset: best ? 1000 : 0 })
         .bindTooltip(`${esc(s.n)} · ${km(s.dist)} km`, { direction: 'top', offset: [0, -14] }).bindPopup(() => popup(s), { maxWidth: 320 });
       zone.addLayer(m); mk['s' + s.i] = m;
@@ -738,7 +877,7 @@ function legend() {
   $('legend').innerHTML = RES_ORDRE.map(r => it(rond(RES[r].c), RES[r].l)).concat([
     it('<i style="background:#1d1d1f;color:#fff;border:1.5px solid #fff;border-radius:5px;font:700 8px/11px var(--font);padding:0 3px;box-shadow:0 1px 3px rgba(0,0,0,.3)">PL</i>', 'Accès PL confirmé'),
     it('<i style="width:12px;height:12px;border-radius:50%;border:3px solid #e53935;background:#fff"></i>', 'Centre de recherche'),
-  ]).join('');
+  ]).concat(N_HORS ? [it('<i style="width:12px;height:12px;border-radius:50%;background:#8e8e93;opacity:.5;box-shadow:0 0 0 1.5px #fff"></i>', 'Non confirmée (hors liste officielle)')] : []).join('');
 }
 
 function setCenter(c, fit = true) {
@@ -835,6 +974,8 @@ $('reseaux').addEventListener('change', e => { const r = e.target.dataset.r; if 
 $('f-pl').addEventListener('change', e => { state.pl = e.target.checked; renderDots(); });
 $('f-ad').addEventListener('change', e => { state.ad = e.target.checked; renderDots(); });
 $('f-24').addEventListener('change', e => { state.h24 = e.target.checked; renderDots(); });
+$('f-hors').addEventListener('change', e => { state.sansDoute = e.target.checked; renderDots(); });
+if (!N_HORS) $('row-hors').style.display = 'none';
 $('fonds').innerHTML = Object.keys(FONDS).map(k => `<button data-f="${k}" class="${k === state.fond ? 'on' : ''}">${k}</button>`).join('');
 $('fonds').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -870,6 +1011,7 @@ const COLS = [
   ['h24', '24 h/24', '', v => v ? '<span class="ok">Oui</span>' : '<span class="nr">—</span>', s => s.h24 ? 'Oui' : ''],
   ['h', 'Horaires', 'hor', (v, s) => s.h24 ? '' : esc(v)],
   ['t', 'Téléphone'],
+  ['src', 'Source', '', v => { const x = SRC[v] || SRC.osm; return `<span class="${x[0]}">${x[1]}</span>`; }, s => (SRC[s.src] || SRC.osm)[1]],
   ['_iti', 'Itinéraire', '', (v, s) => `<a href="${iti(s)}" target="_blank" rel="noopener">${state.center ? 'Itinéraire' : 'Carte'}</a>`, s => iti(s)],
 ];
 function lignes() {
@@ -914,7 +1056,9 @@ const nPL = ST.filter(s => s.pl === 1).length;
 $('facts').innerHTML = `<b>${ST.length.toLocaleString('fr-FR')}</b> stations sur la carte : `
   + Object.entries(parPays).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${esc(PAYS[p] || p)} ${n.toLocaleString('fr-FR')}`).join(', ') + '.'
   + `<br><b>${nPL.toLocaleString('fr-FR')}</b> avec accès poids lourds confirmé.`
-  + `<br>Source OpenStreetMap${D.osm ? `, données du ${esc(D.osm)}` : ''}. Base préparée le ${esc(D.generated)} dans le HUB.`
+  + (D.n_officiel ? `<br><b>${D.n_officiel.toLocaleString('fr-FR')}</b> issues de la liste officielle Circle K (BE, LU, NL, DE : ancien réseau TotalEnergies ; en BE et LU, pompes TotalEnergies et boutique Circle K)`
+      + (N_HORS ? `, ${N_HORS} station(s) OpenStreetMap non confirmée(s).` : '.') : '')
+  + `<br>Ailleurs : OpenStreetMap${D.osm ? `, données du ${esc(D.osm)}` : ''}. Base préparée le ${esc(D.generated)} dans le HUB.`
   + (D.manquants && D.manquants.length ? `<br>Pays non chargés : ${D.manquants.map(p => esc(PAYS[p] || p)).join(', ')}.` : '');
 majRayon(); legend(); applyFond(); renderDots();
 if (ST.length) fitTo(L.latLngBounds(ST.map(s => [s.la, s.lo])));
@@ -924,9 +1068,9 @@ if (ST.length) fitTo(L.latLngBounds(ST.map(s => [s.la, s.lo])));
 '''
 
 
-def build_app_html(stations: list, osm: str, manquants: list, borders) -> str:
+def build_app_html(stations: list, osm: str, manquants: list, borders, n_officiel: int = 0) -> str:
     payload = {
-        "stations": stations, "osm": osm, "manquants": manquants, "pays_noms": PAYS,
+        "stations": stations, "osm": osm, "manquants": manquants, "pays_noms": PAYS, "n_officiel": n_officiel,
         "generated": datetime.now().strftime("%d/%m/%Y à %H:%M"),
     }
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
@@ -1003,6 +1147,34 @@ for i, cc in enumerate(pays_sel):
         dates.append(res["osm"])
 barre.empty()
 
+# Liste officielle Circle K pour BE / LU / NL / DE (ancien réseau TotalEnergies)
+pays_ck = CK_PAYS & set(pays_sel)
+n_off, n_fus, off_ok = 0, 0, None
+if pays_ck and ({"total", "circlek"} & set(res_sel)):
+    try:
+        with st.spinner("Liste officielle Circle K…"):
+            officiel = circlek_officiel()
+        if "LU" in pays_ck:
+            try:
+                with st.spinner("Services des stations Circle K Luxembourg…"):
+                    serv = circlek_lu_services()
+                for o in officiel:
+                    sv = serv.get(norm(o["n"]))
+                    if o["p"] == "LU" and sv:
+                        o["pl"] = sv["pl"] if sv["pl"] is not None else o["pl"]
+                        o["ad"] = sv["ad"] if sv["ad"] is not None else o["ad"]
+                        o["w"] = sv["w"]
+            except Exception:  # noqa: BLE001
+                st.caption("Fiches circlek.lu indisponibles : pas de détail Pompe PL / AdBlue pour le Luxembourg cette fois.")
+        officiel = [o for o in officiel if o["r"] in res_sel]
+        stations, n_fus = fusionner_officiel(stations, officiel, pays_ck)
+        n_off = sum(1 for o in officiel if o["p"] in pays_ck)
+        off_ok = True
+    except Exception:  # noqa: BLE001
+        off_ok = False
+        st.warning("La liste officielle Circle K n’a pas répondu : la Belgique, le Luxembourg, les Pays-Bas et "
+                   "l’Allemagne s’affichent avec les données OpenStreetMap seules.")
+
 if manquants:
     st.warning("OpenStreetMap n’a pas répondu pour : " + ", ".join(PAYS[c] for c in manquants)
                + ". Les autres pays sont chargés ; rechargez la page dans une minute pour réessayer.")
@@ -1024,6 +1196,12 @@ cols = st.columns(len(res_sel) + 1)
 for col, r in zip(cols, res_sel):
     col.metric(lib[r], f"{int((df['r'] == r).sum()):,}".replace(",", " "))
 cols[-1].metric("Accès PL confirmé", f"{int((df['pl'] == 1).sum()):,}".replace(",", " "))
+if off_ok:
+    n_hors = int((df["src"] == "osm_hors").sum())
+    st.caption(f"{n_off} station(s) de la liste officielle Circle K ({', '.join(PAYS[c] for c in sorted(pays_ck))}), "
+               f"dont {n_fus} rapprochée(s) d’une fiche OpenStreetMap. {n_hors} station(s) OpenStreetMap de ces pays "
+               "absentes de la liste officielle restent sur la carte, signalées comme non confirmées. "
+               "En Belgique et au Luxembourg, les pompes restent sous marque TotalEnergies (boutique Circle K).")
 
 recap = (df.assign(Pays=df["p"].map(PAYS), Réseau=df["r"].map(lib))
            .pivot_table(index="Pays", columns="Réseau", values="la", aggfunc="count", fill_value=0))
@@ -1036,7 +1214,7 @@ try:
 except Exception:  # noqa: BLE001
     frontieres = None
 
-app_html = build_app_html(stations, osm, manquants, frontieres)
+app_html = build_app_html(stations, osm, manquants, frontieres, n_off)
 bouton_ouvrir(app_html)
 if frontieres is None:
     st.caption("Tracé des frontières indisponible pour le moment : la carte s’ouvre sans.")
@@ -1047,11 +1225,13 @@ xls = df.assign(
        "AdBlue": df["ad"].map({1: "Oui", 0: "Non"}).fillna(""),
        "GNL": df["lng"].map({1: "Oui", 0: "Non"}).fillna(""),
        "GNC": df["cng"].map({1: "Oui", 0: "Non"}).fillna(""),
-       "OSM": "https://www.openstreetmap.org/" + df["id"]},
+       "Source": df["src"].map({"officiel": "Liste officielle Circle K", "osm": "OpenStreetMap",
+                                "osm_hors": "OpenStreetMap, absente de la liste officielle"}),
+       "OSM": df["id"].map(lambda v: f"https://www.openstreetmap.org/{v}" if v else "")},
 ).rename(columns={"e": "Enseigne", "n": "Station", "a": "Adresse", "cp": "CP", "v": "Localité",
                   "la": "Latitude", "lo": "Longitude", "h": "Horaires", "t": "Téléphone", "w": "Site"})
 xls = xls[["Réseau", "Enseigne", "Station", "Adresse", "CP", "Localité", "Pays", "Latitude", "Longitude",
-           "Accès PL", "AdBlue", "GNL", "GNC", "Horaires", "Téléphone", "Site", "OSM"]]
+           "Accès PL", "AdBlue", "GNL", "GNC", "Horaires", "Téléphone", "Site", "Source", "OSM"]]
 
 d1, d2, d3 = st.columns(3)
 with d1:
@@ -1066,6 +1246,7 @@ with d3:
         stations_pays.clear()
         st.rerun()
 
-st.caption(f"Source OpenStreetMap{f', données du {osm}' if osm else ''}. Les réseaux officiels évoluent plus vite que la "
+st.caption(f"Sources : liste officielle Circle K pour BE, LU, NL et DE quand elle répond, OpenStreetMap ailleurs"
+           f"{f' (données du {osm})' if osm else ''}. Les réseaux officiels évoluent plus vite que la "
            "carte communautaire : une station récemment rebaptisée peut manquer ou apparaître sous l’ancienne marque. "
            "L’accès poids lourds, l’AdBlue et les horaires ne sont renseignés que pour une partie des stations.")
