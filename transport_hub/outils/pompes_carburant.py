@@ -43,8 +43,8 @@ RESEAUX = {
 
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
 
 # Filtre large côté Overpass, tri fin côté Python (classer())
@@ -127,21 +127,35 @@ def acces_pl(reseau: str, tags: dict):
     return None
 
 
-def _overpass(query: str, timeout: int = 260) -> dict:
+def _overpass(query: str, timeout: int = 200) -> dict:
+    """Interroge les serveurs Overpass l'un après l'autre. Un serveur saturé (429 « trop de requêtes »,
+    504 « délai dépassé ») est réessayé une fois après une pause : c'est le cas courant quand plusieurs
+    pays sont chargés à la suite."""
+    import time
+    import urllib.error as uerr
     body = uparse.urlencode({"data": query}).encode()
-    derniere = None
+    erreurs = []
     for url in OVERPASS_URLS:
-        try:
-            req = ureq.Request(url, data=body, headers={**UA, "Content-Type": "application/x-www-form-urlencoded"})
-            with ureq.urlopen(req, timeout=timeout) as r:
-                data = json.loads(r.read().decode("utf-8"))
-            if "runtime error" in (data.get("remark") or "").lower():
-                derniere = data["remark"]          # réponse partielle : on n'en veut pas en cache
-                continue
-            return data
-        except Exception as e:  # noqa: BLE001
-            derniere = e
-    raise RuntimeError(f"OpenStreetMap n’a pas répondu ({derniere})")
+        hote = uparse.urlparse(url).netloc
+        for essai in range(2):
+            try:
+                req = ureq.Request(url, data=body, headers={**UA, "Content-Type": "application/x-www-form-urlencoded"})
+                with ureq.urlopen(req, timeout=timeout) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                if "runtime error" in (data.get("remark") or "").lower():
+                    erreurs.append(f"{hote} : réponse incomplète ({data['remark'][:80]})")  # pas de cache partiel
+                    break
+                return data
+            except uerr.HTTPError as e:
+                erreurs.append(f"{hote} : HTTP {e.code}")
+                if e.code in (429, 502, 503, 504) and essai == 0:
+                    time.sleep(10)
+                    continue
+                break
+            except Exception as e:  # noqa: BLE001
+                erreurs.append(f"{hote} : {type(e).__name__} {str(e)[:80]}")
+                break
+    raise RuntimeError(" ; ".join(erreurs))
 
 
 @st.cache_data(ttl=7 * 86400, show_spinner=False)
@@ -1133,14 +1147,15 @@ if not pays_sel or not res_sel:
     st.info("Choisissez au moins un pays et un réseau.")
     st.stop()
 
-stations, manquants, dates = [], [], []
+stations, manquants, dates, raisons = [], [], [], {}
 barre = st.progress(0.0, text="Chargement des stations…")
 for i, cc in enumerate(pays_sel):
     barre.progress(i / len(pays_sel), text=f"Chargement des stations : {PAYS[cc]}…")
     try:
         res = stations_pays(cc)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         manquants.append(cc)
+        raisons[cc] = str(e)
         continue
     stations += [s for s in res["stations"] if s["r"] in res_sel]
     if res["osm"]:
@@ -1177,7 +1192,15 @@ if pays_ck and ({"total", "circlek"} & set(res_sel)):
 
 if manquants:
     st.warning("OpenStreetMap n’a pas répondu pour : " + ", ".join(PAYS[c] for c in manquants)
-               + ". Les autres pays sont chargés ; rechargez la page dans une minute pour réessayer.")
+               + ". Les autres pays sont chargés.")
+    r1, r2 = st.columns([1, 3])
+    with r1:
+        if st.button("Réessayer ces pays", use_container_width=True):
+            st.rerun()  # les pays déjà chargés sont en cache, seuls les manquants sont redemandés
+    with r2:
+        with st.expander("Détail de l’erreur"):
+            for c in manquants:
+                st.caption(f"{PAYS[c]} : {raisons.get(c, '')}")
 if not stations:
     st.error("Aucune station chargée.")
     st.stop()
