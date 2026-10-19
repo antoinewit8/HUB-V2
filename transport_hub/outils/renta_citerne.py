@@ -65,7 +65,7 @@ MAX_RETRIES  = 3
 RETRY_DELAY  = 2
 VEHICLE      = "EUR_TRAILER_TRUCK"
 
-RESULT_SCHEMA      = "citerne-v3"   # change → les résultats en session sont purgés
+RESULT_SCHEMA      = "citerne-v4"   # change → les résultats en session sont purgés
 SEUIL_ALERTE_VIDE  = 150            # km — trajet à vide signalé au-delà
 SEUIL_ECART_ODO    = 15             # % — écart compteur / PTV signalé au-delà (par camion)
 SEUIL_TEMPS_SITE   = 4.0            # h — temps sur site signalé au-delà
@@ -625,20 +625,42 @@ def construire_trajets(stops: pd.DataFrame, reconstituer: bool = True):
         g = g.sort_values("ordre").to_dict("records")
         dernier_dech = {}
         premier = {}
+        idx_ch, idx_dech = {}, {}
         for k, r in enumerate(g):
             if r["dossier"] and r["role"] != "LAV":
                 premier.setdefault(r["dossier"], (k, r["role"]))
             if r["role"] == "DECH":
                 dernier_dech[r["dossier"]] = k
+                idx_dech.setdefault(r["dossier"], []).append(k)
+            elif r["role"] == "CH":
+                idx_ch.setdefault(r["dossier"], []).append(k)
+
+        # Ordre CH / DECH incohérent : le dossier a bien ses deux bouts dans le fichier,
+        # mais un CH arrive après son dernier DECH (activité validée en retard sur l'OBC,
+        # Séq. inversée…). Sans correction, le dossier serait vu « chargé avant » ET
+        # « déchargé après » la période et resterait à bord jusqu'au lavage suivant.
+        # → à bord uniquement entre son premier et son dernier arrêt CH/DECH.
+        inverses = {}
+        for d in set(idx_ch) & set(idx_dech):
+            if max(idx_ch[d]) > max(idx_dech[d]):
+                ks = idx_ch[d] + idx_dech[d]
+                inverses[d] = (min(ks), max(ks))
+        for d, (k1, k2) in sorted(inverses.items()):
+            r1, r2 = g[k1], g[k2]
+            controles.append(dict(
+                tracteur=tr, dossier=d, type="Ordre CH/DECH incohérent",
+                detail=f"{r1['activite']} {r1['ville']} (ordre {r1['ordre']}) avant "
+                       f"{r2['activite']} {r2['ville']} (ordre {r2['ordre']}) — dossier compté à bord "
+                       f"uniquement entre ces deux arrêts. Vérifier l'horodatage dans Traject."))
 
         # Dossiers déjà à bord au début (chargés avant la période)
-        a_bord = {d for d, (k, act) in premier.items() if act == "DECH"}
+        a_bord = {d for d, (k, act) in premier.items() if act == "DECH" and d not in inverses}
         for d in sorted(a_bord):
             controles.append(dict(tracteur=tr, dossier=d, type="Chargement avant la période",
                                   detail="Dossier déchargé sans chargement dans le fichier — "
                                          + ("chargement reconstitué depuis Origine." if reconstituer
                                             else "km chargés incomplets.")))
-        if reconstituer and g and g[0]["role"] == "DECH":
+        if reconstituer and g and g[0]["role"] == "DECH" and g[0]["dossier"] in a_bord:
             r0 = g[0]
             o = _lieu(r0, "orig")
             if o[0] or o[1]:
@@ -653,7 +675,14 @@ def construire_trajets(stops: pd.DataFrame, reconstituer: bool = True):
         for k in range(len(g)):
             r = g[k]
             d = r["dossier"]
-            if r["role"] == "CH":
+            if d in inverses and k in inverses[d]:
+                if k == inverses[d][0]:
+                    a_bord.add(d)
+                else:
+                    a_bord.discard(d)
+                    dernier_livre = d
+                    a_laver.append(d)
+            elif r["role"] == "CH":
                 for x in a_laver:     # rechargé sans arrêt lavage : lavage fait sur place
                     lavages.append(dict(tracteur=tr, dossier=x, lieu="Sur place (usine / laiterie)",
                                         au_planning=False, ordre=r["ordre"]))
@@ -791,6 +820,12 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
         odo = t["a_odo"] - t["de_odo"] if pd.notna(t["a_odo"]) and pd.notna(t["de_odo"]) else np.nan
         t["km_compteur"] = odo
         t["releve_groupe"] = bool(pd.notna(odo) and t["km"] and t["km"] > 20 and odo < 0.3 * t["km"])
+        if pd.notna(odo) and (odo < 0 or (t["km"] is not None and not np.isnan(t["km"])
+                                          and odo > 2 * t["km"] + 100)):
+            controles.append(dict(tracteur=t["tracteur"], dossier=", ".join(t["a_bord"]),
+                                  type="Relevé compteur incohérent",
+                                  detail=f"{t['de'][0]} → {t['a'][0]} : compteur {odo:+.0f} km vs PTV "
+                                         f"{t['km']:.0f} km — activité probablement validée hors séquence."))
         if t["type"] == "À vide" and t["km"] and t["km"] > SEUIL_ALERTE_VIDE:
             controles.append(dict(tracteur=t["tracteur"], dossier=t["dossier_suiv"] or t["dossier_prec"],
                                   type=f"Vide > {SEUIL_ALERTE_VIDE} km",
