@@ -48,6 +48,8 @@ TOOLS = [
          cat="cartes", desc="Tracés PTV de chaque trajet d’un fichier, à parcourir sur carte."),
     dict(key="carte_chesca", file="outils/carte_chesca.py", title="Carte Chesca", icon="message", cat="cartes",
          desc="Le message de suivi de Chesca, géolocalisé sur carte avec le tableau de dispatch."),
+    dict(key="pompes", file="outils/pompes_carburant.py", title="Pompes carburant", icon="fuel", cat="cartes",
+         desc="Stations TotalEnergies, AS24 et Circle K autour d’un point, accès poids lourds. En plein écran."),
     dict(key="lavages", file="outils/lavages_citernes.py", title="Lavages citernes", icon="drop", cat="citernes",
          desc="Stations de lavage autour d’une position, prix pratiqués et historique. En plein écran."),
     dict(key="trajets_vides", file="outils/trajets_vides_cit.py", title="Trajets vides CIT", icon="swap",
