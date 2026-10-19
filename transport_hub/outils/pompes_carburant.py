@@ -194,6 +194,7 @@ def stations_pays(cc: str) -> dict:
             "w": t.get("website") or t.get("contact:website") or "",
             "id": f"{el.get('type', 'node')}/{el.get('id')}",
             "src": "osm",
+            "ref_fr": re.sub(r"\D", "", t.get("ref:FR:prix-carburants", "")),
             "_nt": len(t),
         })
     return {"stations": dedoublonner(out), "osm": (data.get("osm3s") or {}).get("timestamp_osm_base", "")}
@@ -345,6 +346,144 @@ def fusionner_officiel(osm: list, officiel: list, pays: set) -> tuple[list, int]
             s = {**s, "src": "osm_hors"}
             gardees.append(s)
     return gardees + [o for o in officiel if o["p"] in pays], fusion
+
+
+# ─── Prix affichés ───────────────────────────────────────────────────────────
+# France : flux officiel « prix des carburants » (station par station, mis à jour toutes les 10 min).
+# Belgique : prix maximum officiel du gasoil routier (SPF Economie), le même que la page Prix gasoil.
+FR_PRIX_URLS = [
+    "https://donnees.roulez-eco.fr/opendata/instantane",
+    "https://donnees.roulez-eco.fr/opendata/instantane_ruptures",
+]
+FR_PRIX_JSON = ("https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/"
+                "prix-des-carburants-en-france-flux-instantane-v2/exports/json")
+
+
+def _coord_fr(v):
+    """Coordonnées du flux : degrés × 100 000 (parfois déjà en degrés)."""
+    try:
+        x = float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return x / 100000 if abs(x) > 1000 else x
+
+
+def _prix(v):
+    """'1.689' / '1689' (millièmes, ancien format) → 1.689."""
+    try:
+        x = float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if x > 100:
+        x /= 1000
+    return round(x, 3) if 0.3 < x < 5 else None
+
+
+def _fr_depuis_xml(contenu: bytes) -> list:
+    import zipfile
+    import xml.etree.ElementTree as ET
+    if contenu[:2] == b"PK":
+        with zipfile.ZipFile(io.BytesIO(contenu)) as z:
+            contenu = z.read(next(n for n in z.namelist() if n.lower().endswith(".xml")))
+    racine = ET.fromstring(contenu)
+    out = []
+    for pdv in racine.iter("pdv"):
+        la, lo = _coord_fr(pdv.get("latitude")), _coord_fr(pdv.get("longitude"))
+        if la is None or lo is None:
+            continue
+        gazole = next((p for p in pdv.iter("prix") if (p.get("nom") or "").lower() == "gazole"), None)
+        services = [(sv.text or "").strip() for sv in pdv.iter("service")]
+        out.append({
+            "id": re.sub(r"\D", "", pdv.get("id") or ""), "la": la, "lo": lo,
+            "px": _prix(gazole.get("valeur")) if gazole is not None else None,
+            "maj": (gazole.get("maj") or "")[:16] if gazole is not None else "",
+            "pl": any("poids lourds" in x.lower() for x in services),
+        })
+    return out
+
+
+def _fr_depuis_json(contenu: bytes) -> list:
+    out = []
+    for r in json.loads(contenu.decode("utf-8")):
+        r = {k.lower(): v for k, v in r.items()}
+        geom = r.get("geom") or {}
+        la = _coord_fr(r.get("latitude")) if r.get("latitude") is not None else geom.get("lat")
+        lo = _coord_fr(r.get("longitude")) if r.get("longitude") is not None else geom.get("lon")
+        if la is None or lo is None:
+            continue
+        services = r.get("services_service") or []
+        if isinstance(services, str):
+            services = services.split("//")
+        out.append({
+            "id": re.sub(r"\D", "", str(r.get("id") or "")), "la": float(la), "lo": float(lo),
+            "px": _prix(r.get("gazole_prix")), "maj": str(r.get("gazole_maj") or "")[:16].replace("T", " "),
+            "pl": any("poids lourds" in str(x).lower() for x in services),
+        })
+    return out
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def prix_france() -> list:
+    """Toutes les stations du flux officiel français : id, position, prix du gazole, piste poids lourds."""
+    erreurs = []
+    for url in FR_PRIX_URLS[:1]:
+        try:
+            pts = _fr_depuis_xml(_get(url, UA, timeout=90))
+            if pts:
+                return pts
+        except Exception as e:  # noqa: BLE001
+            erreurs.append(f"roulez-eco : {type(e).__name__} {str(e)[:80]}")
+    try:
+        pts = _fr_depuis_json(_get(FR_PRIX_JSON, UA, timeout=120))
+        if pts:
+            return pts
+    except Exception as e:  # noqa: BLE001
+        erreurs.append(f"data.economie : {type(e).__name__} {str(e)[:80]}")
+    raise RuntimeError(" ; ".join(erreurs) or "flux vide")
+
+
+def lier_prix_france(stations: list, pts: list) -> int:
+    """Rattache à chaque station française son prix officiel : par l'identifiant officiel stocké dans
+    OpenStreetMap si présent, sinon le point du flux le plus proche à moins de 120 m."""
+    par_id = {p["id"]: p for p in pts if p["id"]}
+    grille = {}
+    for p in pts:
+        grille.setdefault((round(p["la"] * 100), round(p["lo"] * 70)), []).append(p)
+    n = 0
+    for s in stations:
+        if s["p"] != "FR":
+            continue
+        p = par_id.get(s.get("ref_fr") or "")
+        if p is None:
+            cle, dmin = (round(s["la"] * 100), round(s["lo"] * 70)), 0.12 ** 2
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for q in grille.get((cle[0] + dx, cle[1] + dy), []):
+                        d = ((q["la"] - s["la"]) * 111) ** 2 + ((q["lo"] - s["lo"]) * 75) ** 2
+                        if d < dmin:
+                            p, dmin = q, d
+        if p is None:
+            continue
+        if p["px"] is not None:
+            s["px"], s["pxm"], s["pxs"] = p["px"], p["maj"], "station"
+            n += 1
+        if p["pl"]:
+            s["pl"] = 1
+            s["plo"] = 1          # piste poids lourds déclarée dans le flux officiel
+    return n
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def prix_max_belgique():
+    """Prix maximum officiel du gasoil routier en Belgique (SPF Economie)."""
+    from tools.fuel_scraper import get_tarif_en_vigueur
+    t = get_tarif_en_vigueur()
+    if "error" in t:
+        raise RuntimeError(t["error"])
+    px = t["prices"].get("diesel_routier") or t["prices"].get("diesel")
+    if not px:
+        raise RuntimeError("gasoil absent du tarif")
+    return {"px": round(float(px), 3), "label": t.get("label", "")}
 
 
 # ─── Frontières (même source que Lavages citernes) ───────────────────────────
@@ -738,6 +877,12 @@ function iti(s) {
   const c = state.center;
   return c ? `https://www.google.com/maps/dir/?api=1&origin=${c.lat.toFixed(6)},${c.lon.toFixed(6)}&destination=${s.la.toFixed(6)},${s.lo.toFixed(6)}&travelmode=driving` : gmaps(s.la, s.lo);
 }
+function eurL(v) { return v == null ? '—' : v.toLocaleString('fr-FR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' €'; }
+function majTxt(s) {
+  if (s.pxs === 'max') return 'maximum officiel' + (s.pxm ? ` (${s.pxm})` : '');
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2})/.exec(s.pxm || '');
+  return m ? `affiché, mis à jour le ${m[3]}/${m[2]} à ${m[4]}` : 'affiché';
+}
 function lieu(s) { return [s.cp, s.v].filter(Boolean).join(' '); }
 function plTxt(v) { return v === 1 ? 'Confirmé' : v === 0 ? 'Interdit' : 'Non renseigné'; }
 function divIcon(html) { return L.divIcon({ className: 'cb-icon', html, iconSize: [0, 0], iconAnchor: [0, 0] }); }
@@ -781,12 +926,13 @@ function popup(s) {
   const l = [`<b style="font-size:14px">${esc(s.n)}</b>`, `<span style="color:${r.c};font-weight:600">${esc(s.e)}</span>`];
   if (s.a) l.push(esc(s.a));
   l.push(`${esc(lieu(s))} ${esc(PAYS[s.p] || s.p)}`.trim());
-  const tags = [tag(s.pl === 1, `PL : ${plTxt(s.pl).toLowerCase()}`)];
+  const tags = [tag(s.pl === 1, `PL : ${plTxt(s.pl).toLowerCase()}${s.plo ? ' (piste PL officielle)' : ''}`)];
   if (s.ad === 1) tags.push(tag(true, 'AdBlue'));
   if (s.lng === 1) tags.push(tag(true, 'GNL'));
   if (s.cng === 1) tags.push(tag(true, 'GNC'));
   if (s.h24) tags.push(tag(true, '24 h/24'));
   l.push(`<div class="pop-tags">${tags.join('')}</div>`);
+  if (s.px != null) l.push(`Gazole : <b style="font-size:14px">${eurL(s.px)}/L</b> <span style="color:var(--sub)">${esc(majTxt(s))}</span>`);
   if (s.h && !s.h24) l.push(`Horaires : ${esc(s.h)}`);
   if (s.t) l.push(`Tél. ${esc(s.t)}`);
   if (s.dist != null) l.push(`À ${km(s.dist)} km à vol d’oiseau`);
@@ -832,6 +978,8 @@ function renderZone() {
       if (!state.best[s.r] || s.dist < state.best[s.r].dist) state.best[s.r] = s;
       if (s.pl === 1 && (!state.best.pl || s.dist < state.best.pl.dist)) state.best.pl = s;
     });
+    const prixRayon = proches.filter(s => s.px != null && s.pxs === 'station');
+    if (prixRayon.length) state.best.prix = prixRayon.reduce((a, b) => (b.px < a.px ? b : a));
     const bestIds = new Set(Object.values(state.best).map(s => s.i));
     const badges = proches.slice(0, MAX_BADGES);
     const dejaLa = new Set(badges.map(s => s.i));
@@ -840,7 +988,7 @@ function renderZone() {
       const r = RES[s.r], best = bestIds.has(s.i);
       const html = `<div class="pp${best ? ' best' : ''}${s.src === 'osm_hors' ? ' doute' : ''}" style="--c:${r.c}">${r.k}${s.pl === 1 ? '<span class="pl">PL</span>' : ''}</div>`;
       const m = L.marker([s.la, s.lo], { icon: divIcon(html), riseOnHover: true, zIndexOffset: best ? 1000 : 0 })
-        .bindTooltip(`${esc(s.n)} · ${km(s.dist)} km`, { direction: 'top', offset: [0, -14] }).bindPopup(() => popup(s), { maxWidth: 320 });
+        .bindTooltip(`${esc(s.n)} · ${km(s.dist)} km${s.px != null ? ' · ' + eurL(s.px) : ''}`, { direction: 'top', offset: [0, -14] }).bindPopup(() => popup(s), { maxWidth: 320 });
       zone.addLayer(m); mk['s' + s.i] = m;
     });
   }
@@ -869,6 +1017,7 @@ function updateInfo() {
     <div class="stats">${cases.join('')}</div>`
     + RES_ORDRE.filter(r => state.res[r]).map(r => near(state.best[r], `Plus proche ${RES[r].l}`, RES[r].c)).join('')
     + near(state.best.pl, 'Plus proche, accès PL confirmé', '#1d1d1f')
+    + (state.best.prix ? `<button class="near" data-i="${state.best.prix.i}"><div class="top"><span><i style="background:#00a854"></i>Gazole le moins cher du rayon</span><b style="color:#00873c">${eurL(state.best.prix.px)}/L</b></div><div class="nn">${esc(state.best.prix.n)}${state.best.prix.v ? ' · ' + esc(state.best.prix.v) : ''} · ${km(state.best.prix.dist)} km</div></button>` : '')
     + `<div class="s" style="margin-top:6px">Distances à vol d’oiseau.${state.proches.length ? '' : ' Aucune station dans ce rayon avec les filtres actuels : les plus proches sont plus loin (en orange).'}</div>`;
 }
 $('info').addEventListener('click', e => {
@@ -1021,6 +1170,7 @@ const COLS = [
   ['p', 'Pays', '', v => esc(PAYS[v] || v), s => PAYS[s.p] || s.p],
   ['dist', 'Distance (km)', 'num', v => km(v), s => s.dist == null ? '' : Math.round(s.dist * 10) / 10],
   ['pl', 'Accès PL', '', v => v === 1 ? '<span class="ok">Confirmé</span>' : v === 0 ? '<span class="ko">Interdit</span>' : '<span class="nr">—</span>', s => plTxt(s.pl)],
+  ['px', 'Gazole €/L', 'num', (v, s) => v == null ? '<span class="nr">—</span>' : `<span${state.best.prix && state.best.prix.i === s.i ? ' class="ok"' : ''}>${eurL(v).replace(' €', '')}</span>${s.pxs === 'max' ? '<span class="nr"> max</span>' : ''}`, s => s.px ?? ''],
   ['ad', 'AdBlue', '', oui, s => s.ad === 1 ? 'Oui' : s.ad === 0 ? 'Non' : ''],
   ['h24', '24 h/24', '', v => v ? '<span class="ok">Oui</span>' : '<span class="nr">—</span>', s => s.h24 ? 'Oui' : ''],
   ['h', 'Horaires', 'hor', (v, s) => s.h24 ? '' : esc(v)],
@@ -1072,6 +1222,7 @@ $('facts').innerHTML = `<b>${ST.length.toLocaleString('fr-FR')}</b> stations sur
   + `<br><b>${nPL.toLocaleString('fr-FR')}</b> avec accès poids lourds confirmé.`
   + (D.n_officiel ? `<br><b>${D.n_officiel.toLocaleString('fr-FR')}</b> issues de la liste officielle Circle K (BE, LU, NL, DE : ancien réseau TotalEnergies ; en BE et LU, pompes TotalEnergies et boutique Circle K)`
       + (N_HORS ? `, ${N_HORS} station(s) OpenStreetMap non confirmée(s).` : '.') : '')
+  + (D.prix_le ? `<br>Prix du gazole relevés le ${esc(D.prix_le)} : affichés station par station en France (flux officiel), maximum officiel en Belgique.` : '')
   + `<br>Ailleurs : OpenStreetMap${D.osm ? `, données du ${esc(D.osm)}` : ''}. Base préparée le ${esc(D.generated)} dans le HUB.`
   + (D.manquants && D.manquants.length ? `<br>Pays non chargés : ${D.manquants.map(p => esc(PAYS[p] || p)).join(', ')}.` : '');
 majRayon(); legend(); applyFond(); renderDots();
@@ -1082,8 +1233,9 @@ if (ST.length) fitTo(L.latLngBounds(ST.map(s => [s.la, s.lo])));
 '''
 
 
-def build_app_html(stations: list, osm: str, manquants: list, borders, n_officiel: int = 0) -> str:
+def build_app_html(stations: list, osm: str, manquants: list, borders, n_officiel: int = 0, prix_le: str = "") -> str:
     payload = {
+        "prix_le": prix_le,
         "stations": stations, "osm": osm, "manquants": manquants, "pays_noms": PAYS, "n_officiel": n_officiel,
         "generated": datetime.now().strftime("%d/%m/%Y à %H:%M"),
     }
@@ -1190,6 +1342,23 @@ if pays_ck and ({"total", "circlek"} & set(res_sel)):
         st.warning("La liste officielle Circle K n’a pas répondu : la Belgique, le Luxembourg, les Pays-Bas et "
                    "l’Allemagne s’affichent avec les données OpenStreetMap seules.")
 
+# Prix affichés
+n_prix_fr, prix_be, err_prix = 0, None, []
+if "FR" in pays_sel and any(s["p"] == "FR" for s in stations):
+    try:
+        with st.spinner("Prix officiels des stations françaises…"):
+            n_prix_fr = lier_prix_france(stations, prix_france())
+    except Exception as e:  # noqa: BLE001
+        err_prix.append(f"France : {e}")
+if "BE" in pays_sel:
+    try:
+        prix_be = prix_max_belgique()
+        for s in stations:
+            if s["p"] == "BE" and s.get("px") is None:
+                s["px"], s["pxm"], s["pxs"] = prix_be["px"], prix_be["label"], "max"
+    except Exception as e:  # noqa: BLE001
+        err_prix.append(f"Belgique : {e}")
+
 if manquants:
     st.warning("OpenStreetMap n’a pas répondu pour : " + ", ".join(PAYS[c] for c in manquants)
                + ". Les autres pays sont chargés.")
@@ -1225,6 +1394,15 @@ if off_ok:
                f"dont {n_fus} rapprochée(s) d’une fiche OpenStreetMap. {n_hors} station(s) OpenStreetMap de ces pays "
                "absentes de la liste officielle restent sur la carte, signalées comme non confirmées. "
                "En Belgique et au Luxembourg, les pompes restent sous marque TotalEnergies (boutique Circle K).")
+if n_prix_fr or prix_be:
+    st.caption(" ".join(x for x in [
+        f"Prix du gazole affiché pour {n_prix_fr} station(s) en France (flux officiel, mis à jour toutes les 10 min)."
+        if n_prix_fr else "",
+        f"Belgique : prix maximum officiel du gasoil routier, {str(round(prix_be['px'], 3)).replace('.', ',')} €/L "
+        f"({prix_be['label']})." if prix_be else "",
+    ] if x))
+if err_prix:
+    st.caption("Prix indisponibles pour le moment : " + " ; ".join(err_prix))
 
 recap = (df.assign(Pays=df["p"].map(PAYS), Réseau=df["r"].map(lib))
            .pivot_table(index="Pays", columns="Réseau", values="la", aggfunc="count", fill_value=0))
@@ -1237,7 +1415,8 @@ try:
 except Exception:  # noqa: BLE001
     frontieres = None
 
-app_html = build_app_html(stations, osm, manquants, frontieres, n_off)
+app_html = build_app_html(stations, osm, manquants, frontieres, n_off,
+                          datetime.now().strftime("%d/%m/%Y à %H:%M") if (n_prix_fr or prix_be) else "")
 bouton_ouvrir(app_html)
 if frontieres is None:
     st.caption("Tracé des frontières indisponible pour le moment : la carte s’ouvre sans.")
@@ -1248,13 +1427,17 @@ xls = df.assign(
        "AdBlue": df["ad"].map({1: "Oui", 0: "Non"}).fillna(""),
        "GNL": df["lng"].map({1: "Oui", 0: "Non"}).fillna(""),
        "GNC": df["cng"].map({1: "Oui", 0: "Non"}).fillna(""),
+       "Gazole €/L": df["px"] if "px" in df else None,
+       "Prix": (df["pxs"].map({"station": "Affiché à la station", "max": "Maximum officiel"}) if "pxs" in df else None),
+       "Prix mis à jour": df["pxm"] if "pxm" in df else None,
        "Source": df["src"].map({"officiel": "Liste officielle Circle K", "osm": "OpenStreetMap",
                                 "osm_hors": "OpenStreetMap, absente de la liste officielle"}),
        "OSM": df["id"].map(lambda v: f"https://www.openstreetmap.org/{v}" if v else "")},
 ).rename(columns={"e": "Enseigne", "n": "Station", "a": "Adresse", "cp": "CP", "v": "Localité",
                   "la": "Latitude", "lo": "Longitude", "h": "Horaires", "t": "Téléphone", "w": "Site"})
 xls = xls[["Réseau", "Enseigne", "Station", "Adresse", "CP", "Localité", "Pays", "Latitude", "Longitude",
-           "Accès PL", "AdBlue", "GNL", "GNC", "Horaires", "Téléphone", "Site", "Source", "OSM"]]
+           "Accès PL", "AdBlue", "GNL", "GNC", "Gazole €/L", "Prix", "Prix mis à jour",
+           "Horaires", "Téléphone", "Site", "Source", "OSM"]]
 
 d1, d2, d3 = st.columns(3)
 with d1:
