@@ -1,10 +1,11 @@
 """
-Page Streamlit : Pompes TotalEnergies / Circle K
-- Stations-service des réseaux TotalEnergies (avec AS24, sa filiale poids lourds) et Circle K,
-  récupérées pays par pays dans OpenStreetMap (Overpass), mises en cache 7 jours
-- La carte s'ouvre dans un nouvel onglet, en plein écran, dans le même esprit que Lavages citernes :
-  panneau à gauche (style Apple), synthèse en haut à droite, détail en bas sur demande
-- Carte téléchargeable en fichier HTML autonome, base téléchargeable en Excel
+Page Streamlit : Pompes carburant
+- Mes stations : la liste Excel des stations préférées (assets/pompes_favorites.xlsx, réseau Total Trucks),
+  affichée directement à l'ouverture de la carte, prix du gazole officiel en France
+- Autres stations : TotalEnergies, AS24 et Circle K cherchées à la demande depuis la carte (OpenStreetMap,
+  via Overpass), dans le rayon autour du point choisi ou dans tout un pays ; liste officielle Circle K
+  pour BE, LU, NL et DE
+- La carte s'ouvre dans un nouvel onglet, en plein écran, dans le même esprit que Lavages citernes
 """
 
 import io
@@ -14,6 +15,7 @@ import unicodedata
 import urllib.request as ureq
 import urllib.parse as uparse
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -21,8 +23,8 @@ import streamlit.components.v1 as components
 
 from core import ui
 
-ui.page("pompes", "Stations TotalEnergies, AS24 et Circle K autour d’un point, accès poids lourds et services. "
-                  "La carte s’ouvre en plein écran dans un nouvel onglet.")
+ui.page("pompes", "Mes stations préférées dès l’ouverture, et les autres stations TotalEnergies, AS24 et Circle K "
+                  "cherchées à la demande, dans le rayon ou dans tout le pays. La carte s’ouvre en plein écran.")
 
 UA = {"User-Agent": "CB-Transport-Hub/1.0 (pompes carburant)"}
 
@@ -33,31 +35,19 @@ PAYS = {
     "PL": "Pologne", "CZ": "Tchéquie", "SK": "Slovaquie", "HU": "Hongrie",
     "LT": "Lituanie", "LV": "Lettonie", "EE": "Estonie",
 }
-PAYS_DEFAUT = ["BE", "LU", "FR", "NL", "DE"]
 
-RESEAUX = {
-    "total": "TotalEnergies",
-    "as24": "AS24 (TotalEnergies, poids lourds)",
-    "circlek": "Circle K",
-}
-
+# Serveurs Overpass interrogés par la carte elle-même (depuis le navigateur), l'un après l'autre
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
-# Filtre large côté Overpass, tri fin côté Python (classer())
-QUERY = """[out:json][timeout:240];
-area["ISO3166-1"="{cc}"]["admin_level"="2"]->.a;
-(
-  nwr(area.a)["amenity"="fuel"]["brand"~"total|circle ?k|as ?24|^elan",i];
-  nwr(area.a)["amenity"="fuel"]["name"~"total|circle ?k|as ?24",i];
-  nwr(area.a)["amenity"="fuel"]["operator"~"total|circle ?k|as ?24",i];
-);
-out center tags;"""
-
 EUROPE_BBOX = (-11.0, 35.0, 32.0, 72.0)  # ouest, sud, est, nord (écarte l'outre-mer)
+
+HUB_DIR = Path(__file__).resolve().parents[1]
+FAV_ASSET = HUB_DIR / "assets" / "pompes_favorites.xlsx"          # liste versionnée dans le dépôt
+FAV_LOCAL = HUB_DIR / "data" / "pompes" / "favorites.xlsx"        # liste remplacée depuis la page
 
 
 # ─── Utilitaires ─────────────────────────────────────────────────────────────
@@ -70,155 +60,170 @@ def norm(text) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-RX_AS24 = re.compile(r"\bAS ?24\b")
-RX_CK = re.compile(r"\bCIRCLE ?K\b")
-RX_TOTAL_BRAND = re.compile(r"^(TOTAL ?ENERGIES|TOTAL|ELAN)\b")
-RX_TOTAL = re.compile(r"\bTOTAL ?ENERGIES\b|^TOTAL\b|\bTOTAL ACCESS\b")
+# ─── Mes stations (liste Excel) ──────────────────────────────────────────────
+# Noms de colonnes reconnus (normalisés : majuscules, sans accent, « _ » → espace)
+FAV_COLS = {
+    "la": ["LATITUDE", "LAT", "Y"],
+    "lo": ["LONGITUDE", "LON", "LNG", "LONG", "X"],
+    "n": ["LIBELLE", "NOM", "NOM STATION", "STATION", "NAME"],
+    "a": ["ADRESSE", "ADRESSE 1", "ADDRESS", "RUE"],
+    "cp": ["CODE POSTAL", "CP", "ZIP", "POSTCODE"],
+    "v": ["VILLE", "LOCALITE", "COMMUNE", "CITY"],
+    "p": ["PAYS", "CODE PAYS", "COUNTRY", "ISO"],
+    "marque": ["MARQUE", "BRAND", "ENSEIGNE"],
+    "reseau": ["NOM GROUPE", "NOM RESEAU", "RESEAU", "GROUPE"],
+    "code": ["CODE", "CODE IMPLANTATION", "ID", "REFERENCE"],
+}
+PAYS_NOMS_NORM = {norm(v): k for k, v in PAYS.items()}
 
 
-def classer(tags: dict):
-    """Réseau d'une station : 'total', 'as24', 'circlek' ou None.
-    La marque (brand) décide si elle est renseignée ; sinon le nom, puis l'exploitant."""
-    for champ in ("brand", "name", "operator"):
-        v = norm(tags.get(champ))
-        if not v:
-            continue
-        if RX_AS24.search(v):
-            return "as24"
-        if RX_CK.search(v):
-            return "circlek"
-        if (RX_TOTAL_BRAND if champ == "brand" else RX_TOTAL).search(v):
-            return "total"
-        if champ == "brand":
-            return None  # autre marque explicite (Esso, Q8…) : on n'en veut pas
-    return None
+def _num(v):
+    try:
+        x = float(str(v).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x
 
 
-def enseigne(reseau: str, tags: dict) -> str:
-    txt = norm(" ".join(str(tags.get(k, "")) for k in ("brand", "name")))
-    if reseau == "total":
-        if re.search(r"\bELAN\b", norm(tags.get("brand"))):
-            return "Elan (TotalEnergies)"
-        return "TotalEnergies Access" if "ACCESS" in txt else "TotalEnergies"
-    if reseau == "circlek":
-        return "Circle K Truck" if "TRUCK" in txt else "Circle K"
-    return "AS24"
+def _txt(v) -> str:
+    if v is None or (isinstance(v, float) and v != v):
+        return ""
+    s = str(v).strip()
+    return s[:-2] if re.fullmatch(r"\d+\.0", s) else s
 
 
-def oui_non(v):
-    v = (v or "").strip().lower()
-    if v in ("yes", "designated", "only"):
-        return 1
-    if v == "no":
-        return 0
-    return None
+def _joli(s: str) -> str:
+    """« RELAIS DEVEZE » → « Relais Deveze » (seulement si tout est en majuscules)."""
+    if not s or not s.isupper():
+        return s
+    mots = s.title().split(" ")
+    petits = {"De", "Du", "Des", "La", "Le", "Les", "Et", "En", "Sur", "Sous", "Au", "Aux", "A"}
+    mots = [m.lower() if i and m in petits else m for i, m in enumerate(mots)]
+    return re.sub(r"\b([DL])'", lambda x: x.group(1).lower() + "'", " ".join(mots))
 
 
-def acces_pl(reseau: str, tags: dict):
-    """1 = confirmé, 0 = interdit, None = non renseigné."""
-    if reseau == "as24":
-        return 1
-    if oui_non(tags.get("fuel:HGV_diesel")) == 1 or oui_non(tags.get("hgv")) == 1:
-        return 1
-    if "TRUCK" in norm(" ".join(str(tags.get(k, "")) for k in ("brand", "name"))):
-        return 1
-    if oui_non(tags.get("hgv")) == 0:
-        return 0
-    return None
+@st.cache_resource(show_spinner=False)
+def _geocodeur():
+    from tools.werbomont.engine import Geocodeur
+    return Geocodeur()
 
 
-def _overpass(query: str, timeout: int = 200) -> dict:
-    """Interroge les serveurs Overpass l'un après l'autre. Un serveur saturé (429 « trop de requêtes »,
-    504 « délai dépassé ») est réessayé une fois après une pause : c'est le cas courant quand plusieurs
-    pays sont chargés à la suite."""
-    import time
-    import urllib.error as uerr
-    body = uparse.urlencode({"data": query}).encode()
-    erreurs = []
-    for url in OVERPASS_URLS:
-        hote = uparse.urlparse(url).netloc
-        for essai in range(2):
+def _cp_pays(cc: str, cp: str) -> str:
+    """Code postal tel que stocké dans GeoNames (FR/DE sur 5 chiffres, LU préfixé « L- »)."""
+    cp = re.sub(r"^[A-Z]{1,2}-", "", cp.upper().replace(" ", ""))
+    if cc in ("FR", "DE") and cp.isdigit():
+        return cp.zfill(5)
+    if cc == "LU" and cp.isdigit():
+        return f"L-{cp}"
+    return cp
+
+
+def _deviner_pays(cp: str, la, lo) -> str:
+    """Pays d'une station sans colonne pays : celui dont le code postal tombe à moins de 40 km du point."""
+    try:
+        g = _geocodeur()
+    except Exception:  # noqa: BLE001
+        return "FR"
+    meilleur, dmin = "", 40.0
+    for cc in ("FR", "BE", "LU", "NL", "DE"):
+        pt = g.par_cp.get((cc, _cp_pays(cc, cp)))
+        if pt and la is not None:
+            d = ((pt[0] - la) * 111) ** 2 + ((pt[1] - lo) * 72) ** 2
+            if d ** .5 < dmin:
+                meilleur, dmin = cc, d ** .5
+    return meilleur or ("FR" if len(re.sub(r"\D", "", cp)) in (4, 5) else "")
+
+
+def _reseau(texte: str) -> tuple[str, str]:
+    """(réseau, enseigne) d'une station de la liste, d'après la marque, le réseau et le nom."""
+    t = norm(texte)
+    if re.search(r"\bAS ?24\b", t):
+        return "as24", "AS24"
+    if re.search(r"\bCIRCLE ?K\b", t):
+        return "circlek", "Circle K"
+    if re.search(r"\bACCES\b|\bACCESS\b", t):
+        return "total", "TotalEnergies Access"
+    if re.search(r"\bELAN\b", t):
+        return "total", "Elan (TotalEnergies)"
+    if re.search(r"\bELF", t):
+        return "total", "Elf (TotalEnergies)"
+    if re.search(r"\bTOTAL", t):
+        return "total", "TotalEnergies"
+    return "autre", ""
+
+
+def lire_favorites(contenu: bytes, nom_fichier: str = "") -> tuple[list, list]:
+    """Stations de la liste Excel (ou CSV) → (stations, remarques). Les colonnes sont reconnues par leur nom ;
+    sans coordonnées, la station est placée d'après son code postal et sa localité (table GeoNames)."""
+    if nom_fichier.lower().endswith(".csv"):
+        texte = contenu.decode("utf-8-sig", "replace")
+        df = pd.read_csv(io.StringIO(texte), sep=None, engine="python", dtype=str)
+    else:
+        df = pd.read_excel(io.BytesIO(contenu), dtype=str)
+    entetes = {norm(str(c).replace("_", " ")): c for c in df.columns}
+    col = {k: next((entetes[a] for a in alias if a in entetes), None) for k, alias in FAV_COLS.items()}
+    remarques = []
+    if not col["n"] and not col["a"]:
+        raise ValueError("colonnes introuvables : il faut au moins un nom (LIBELLE / NOM) ou une adresse")
+    if not (col["la"] and col["lo"]) and not (col["cp"] or col["v"]):
+        raise ValueError("ni coordonnées (LATITUDE / LONGITUDE) ni code postal / ville pour placer les stations")
+
+    out, places, perdues = [], 0, []
+    w, s_, e, n_ = EUROPE_BBOX
+    for i, r in enumerate(df.to_dict("records")):
+        g = lambda k: _txt(r.get(col[k])) if col[k] else ""  # noqa: E731
+        nom, cp, ville = g("n"), g("cp"), g("v")
+        la, lo = _num(g("la")), _num(g("lo"))
+        if la is not None and lo is not None and not (s_ <= la <= n_ and w <= lo <= e) and (s_ <= lo <= n_ and w <= la <= e):
+            la, lo = lo, la                       # colonnes inversées
+        pays_txt = g("p")
+        cc = pays_txt.upper() if len(pays_txt) == 2 and pays_txt.upper() in PAYS else PAYS_NOMS_NORM.get(norm(pays_txt), "")
+        if la is None or lo is None or not (s_ <= la <= n_ and w <= lo <= e):
+            cc = cc or "FR"
             try:
-                req = ureq.Request(url, data=body, headers={**UA, "Content-Type": "application/x-www-form-urlencoded"})
-                with ureq.urlopen(req, timeout=timeout) as r:
-                    data = json.loads(r.read().decode("utf-8"))
-                if "runtime error" in (data.get("remark") or "").lower():
-                    erreurs.append(f"{hote} : réponse incomplète ({data['remark'][:80]})")  # pas de cache partiel
-                    break
-                return data
-            except uerr.HTTPError as e:
-                erreurs.append(f"{hote} : HTTP {e.code}")
-                if e.code in (429, 502, 503, 504) and essai == 0:
-                    time.sleep(10)
-                    continue
-                break
-            except Exception as e:  # noqa: BLE001
-                erreurs.append(f"{hote} : {type(e).__name__} {str(e)[:80]}")
-                break
-    raise RuntimeError(" ; ".join(erreurs))
-
-
-@st.cache_data(ttl=7 * 86400, show_spinner=False)
-def stations_pays(cc: str) -> dict:
-    """Stations TotalEnergies / AS24 / Circle K d'un pays. Lève une erreur si Overpass ne répond pas
-    (une erreur n'est pas mise en cache : on réessaie au prochain chargement)."""
-    data = _overpass(QUERY.format(cc=cc))
-    w, s, e, n = EUROPE_BBOX
-    out = []
-    for el in data.get("elements", []):
-        t = el.get("tags") or {}
-        la = el.get("lat", (el.get("center") or {}).get("lat"))
-        lo = el.get("lon", (el.get("center") or {}).get("lon"))
-        if la is None or lo is None or not (s <= la <= n and w <= lo <= e):
-            continue
-        res = classer(t)
-        if not res:
-            continue
-        rue = " ".join(x for x in (t.get("addr:street"), t.get("addr:housenumber")) if x)
+                la, lo, _prec = _geocodeur()(cc, _cp_pays(cc, cp), norm(ville))
+            except Exception:  # noqa: BLE001
+                la = lo = None
+            if la is None:
+                perdues.append(nom or f"ligne {i + 2}")
+                continue
+            places += 1
+        if not cc:
+            cc = _deviner_pays(cp, la, lo)
+        if cc in ("FR", "DE") and cp.isdigit():
+            cp = cp.zfill(5)
+        r_, ens = _reseau(" ".join([g("marque"), g("reseau"), nom]))
+        groupe = g("reseau")
+        trucks = "TRUCK" in norm(groupe) or r_ == "as24"
+        code = g("code")
         out.append({
-            "r": res,
-            "e": enseigne(res, t),
-            "n": t.get("name") or t.get("brand") or RESEAUX[res],
-            "a": rue,
-            "cp": t.get("addr:postcode", ""),
-            "v": t.get("addr:city") or t.get("addr:place") or "",
-            "p": cc,
-            "la": round(float(la), 6),
-            "lo": round(float(lo), 6),
-            "pl": acces_pl(res, t),
-            "ad": oui_non(t.get("fuel:adblue")),
-            "lng": oui_non(t.get("fuel:lng")),
-            "cng": oui_non(t.get("fuel:cng")),
-            "h": t.get("opening_hours", ""),
-            "t": t.get("phone") or t.get("contact:phone") or "",
-            "w": t.get("website") or t.get("contact:website") or "",
-            "id": f"{el.get('type', 'node')}/{el.get('id')}",
-            "src": "osm",
-            "ref_fr": re.sub(r"\D", "", t.get("ref:FR:prix-carburants", "")),
-            "_nt": len(t),
+            "r": r_, "e": ens or g("marque").title() or "Autre réseau",
+            "n": _joli(nom) or _joli(ville) or "Station", "a": _joli(g("a")), "cp": cp, "v": _joli(ville), "p": cc,
+            "la": round(float(la), 6), "lo": round(float(lo), 6),
+            "pl": 1 if trucks else None,
+            "pln": (re.sub(r"\s*(\d{4}|\().*$", "", groupe).strip() or groupe) if trucks else "",
+            "ad": None, "lng": None, "cng": None, "h": "", "t": "", "w": "",
+            "id": "", "code": code, "grp": groupe, "src": "favori", "fav": 1,
         })
-    return {"stations": dedoublonner(out), "osm": (data.get("osm3s") or {}).get("timestamp_osm_base", "")}
+    if places:
+        remarques.append(f"{places} station(s) sans coordonnées placée(s) d’après le code postal et la localité.")
+    if perdues:
+        remarques.append(f"{len(perdues)} station(s) impossibles à placer : " + ", ".join(perdues[:8])
+                         + ("…" if len(perdues) > 8 else ""))
+    return out, remarques
 
 
-def dedoublonner(stations: list) -> list:
-    """Une station dessinée à la fois en point et en surface : on garde la fiche la plus complète (< 80 m)."""
-    stations = sorted(stations, key=lambda d: -d["_nt"])
-    gardees, grille = [], {}
-    for d in stations:
-        cle = (round(d["la"] * 200), round(d["lo"] * 130))
-        doublon = False
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for g in grille.get((cle[0] + dx, cle[1] + dy), []):
-                    if g["r"] == d["r"] and abs(g["la"] - d["la"]) < 0.0008 and abs(g["lo"] - d["lo"]) < 0.0012:
-                        doublon = True
-                        break
-        if not doublon:
-            grille.setdefault(cle, []).append(d)
-            gardees.append(d)
-    for d in gardees:
-        d.pop("_nt", None)
-    return gardees
+def fichier_favorites() -> Path | None:
+    """La liste remplacée depuis la page si elle existe, sinon celle du dépôt."""
+    for p in (FAV_LOCAL, FAV_ASSET):
+        if p.exists():
+            return p
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def favorites_depuis(path: str, mtime: float) -> tuple[list, list]:
+    return lire_favorites(Path(path).read_bytes(), path)
 
 
 # ─── Liste officielle Circle K (API du localisateur de circlek.lu) ──────────
@@ -313,39 +318,6 @@ def circlek_lu_services() -> dict:
     if not out:
         raise RuntimeError("aucune fiche lue")
     return out
-
-
-def fusionner_officiel(osm: list, officiel: list, pays: set) -> tuple[list, int]:
-    """Dans les pays couverts par la liste officielle, les stations TotalEnergies / Circle K d'OSM situées à
-    moins de 250 m d'une station officielle sont remplacées par elle (en lui passant les infos PL, AdBlue…
-    qu'OSM connaît). Les autres restent, marquées « OSM, absente de la liste officielle »."""
-    grille = {}
-    for o in officiel:
-        grille.setdefault((round(o["la"] * 50), round(o["lo"] * 30)), []).append(o)
-    gardees, fusion = [], 0
-    for s in osm:
-        if s["p"] not in pays or s["r"] == "as24":
-            gardees.append(s)
-            continue
-        cle = (round(s["la"] * 50), round(s["lo"] * 30))
-        proche, dmin = None, 1e9
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for o in grille.get((cle[0] + dx, cle[1] + dy), []):
-                    d = ((o["la"] - s["la"]) * 111) ** 2 + ((o["lo"] - s["lo"]) * 71) ** 2
-                    if d < dmin:
-                        proche, dmin = o, d
-        if proche is not None and dmin <= 0.25 ** 2:
-            for k in ("pl", "ad", "lng", "cng"):
-                if proche.get(k) is None and s.get(k) is not None:
-                    proche[k] = s[k]
-            if not proche["id"]:
-                proche["id"] = s["id"]
-            fusion += 1
-        else:
-            s = {**s, "src": "osm_hors"}
-            gardees.append(s)
-    return gardees + [o for o in officiel if o["p"] in pays], fusion
 
 
 # ─── Prix affichés ───────────────────────────────────────────────────────────
@@ -534,7 +506,7 @@ APP_HTML = r'''<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Pompes TotalEnergies · Circle K</title>
+<title>Pompes carburant</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9B%BD%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
@@ -726,6 +698,22 @@ td a { color: #0066cc; text-decoration: none; }
 .src-off { color: #00873c; font-weight: 600; }
 .src-osm { color: var(--sub); }
 .src-hors { color: #b45a00; font-weight: 600; }
+.src-fav { color: #a07800; font-weight: 600; }
+.pp.fav { box-shadow: 0 0 0 2.5px #ffcc00, 0 2px 6px rgba(0,0,0,.45); }
+.pp.fav.best { box-shadow: 0 0 0 3px #ffcc00, 0 0 0 7px rgba(255,255,255,.5), 0 2px 10px rgba(0,0,0,.5); }
+.star { color: #ffb800; }
+
+/* Recherche des autres stations */
+.select { width: 100%; height: 40px; margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
+  padding: 0 12px; font: 14px var(--font); color: var(--text); outline: none; cursor: pointer; }
+.select:focus { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(0,113,227,.18); }
+.etat { display: flex; gap: 9px; align-items: flex-start; margin: 12px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--sub); }
+.etat.err { color: #c62828; }
+.etat.ok { color: #1d1d1f; }
+.spin { flex: none; width: 14px; height: 14px; margin-top: 1px; border-radius: 50%; border: 2px solid var(--soft);
+  border-top-color: var(--blue); animation: tour .8s linear infinite; }
+@keyframes tour { to { transform: rotate(360deg); } }
+.lien { border: none; background: none; padding: 0; color: var(--blue); font: 500 12.5px var(--font); cursor: pointer; }
 .cb-centre { width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%;
   border: 5px solid #e53935; background: rgba(255,255,255,.95); box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,.45); }
 
@@ -759,7 +747,7 @@ td a { color: #0066cc; text-decoration: none; }
 
 <aside id="panel" class="glass">
   <h1 class="title">Pompes carburant</h1>
-  <p class="lede">Stations TotalEnergies et Circle K autour d’un point, avec l’accès poids lourds quand il est connu.</p>
+  <p class="lede">Mes stations dès l’ouverture. Les autres stations TotalEnergies, AS24 et Circle K sont cherchées quand vous activez leur réseau.</p>
 
   <div class="sec">
     <h2>Position</h2>
@@ -781,8 +769,22 @@ td a { color: #0066cc; text-decoration: none; }
   </div>
 
   <div class="sec">
-    <h2>Réseaux</h2>
+    <h2>Mes stations</h2>
+    <div class="rows">
+      <label class="row"><span class="nm"><span class="dot" style="background:#2f6bff;box-shadow:0 0 0 2px #ffcc00,0 1px 4px rgba(0,0,0,.25)">★</span><span>Liste Excel<br><small id="fav-n"></small></span></span><span class="sw"><input type="checkbox" id="t-fav" checked><span></span></span></label>
+    </div>
+  </div>
+
+  <div class="sec">
+    <h2>Autres stations</h2>
+    <p class="lbl">Chercher</p>
+    <div class="seg" id="zone">
+      <button data-z="rayon" class="on">Dans le rayon</button>
+      <button data-z="pays">Tout le pays</button>
+    </div>
+    <select class="select" id="pays-rech" aria-label="Pays à parcourir" style="display:none"></select>
     <div class="rows" id="reseaux"></div>
+    <div class="etat" id="rech-etat"></div>
   </div>
 
   <div class="sec">
@@ -841,14 +843,18 @@ td a { color: #0066cc; text-decoration: none; }
 <script>
 const D = __DATA__;
 const BORDERS = __BORDERS__;
-const ST = D.stations;
+const ST = D.stations;                       // mes stations au départ, puis les stations trouvées
 const RES = {
   total:   { l: 'TotalEnergies', c: '#2f6bff', k: 'T', s: 'stations-service' },
   as24:    { l: 'AS24', c: '#00a37a', k: 'A', s: 'poids lourds, filiale TotalEnergies' },
   circlek: { l: 'Circle K', c: '#e5202e', k: 'K', s: 'stations-service' },
+  autre:   { l: 'Autre réseau', c: '#636366', k: '•', s: '' },
 };
-const RES_ORDRE = Object.keys(RES).filter(r => ST.some(s => s.r === r));
+const RES_RECH = ['total', 'as24', 'circlek'];          // réseaux que l'on peut chercher
+const RES_ORDRE = RES_RECH.concat(ST.some(s => s.r === 'autre') ? ['autre'] : []);
 const PAYS = D.pays_noms || {};
+const CK_PAYS = new Set(['BE', 'LU', 'NL', 'DE']);
+const EUROPE = { w: -11, s: 35, e: 32, n: 72 };
 function esri(s) { return `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`; }
 const FONDS = {
   'Satellite': { layers: [[esri('World_Imagery'), 'Tiles © Esri', 18], [esri('Reference/World_Boundaries_and_Places'), '© Esri', 18]],
@@ -859,7 +865,8 @@ const FONDS = {
 };
 const MAX_BADGES = 400, MAX_LIGNES = 600;
 
-const state = { res: Object.fromEntries(RES_ORDRE.map(r => [r, true])), center: null, rayon: 30, fond: 'Satellite',
+const state = { fav: true, res: { total: false, as24: false, circlek: false, autre: true }, center: null, rayon: 30,
+                zone: 'rayon', paysRech: D.pays_defaut || 'FR', paysManuel: false, fond: 'Satellite',
                 borders: true, hors: true, pl: false, ad: false, h24: false, sansDoute: false, sort: { key: 'dist', dir: 1 }, filtre: '',
                 proches: [], best: {} };
 const $ = id => document.getElementById(id);
@@ -872,6 +879,7 @@ function hav(a, b, c, d) {
 }
 function nn(t) { return (t || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); }
 function km(v) { return v == null ? '—' : v.toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+function nb(v) { return v.toLocaleString('fr-FR'); }
 function gmaps(la, lo) { return `https://www.google.com/maps/search/?api=1&query=${la.toFixed(6)},${lo.toFixed(6)}`; }
 function iti(s) {
   const c = state.center;
@@ -886,20 +894,22 @@ function majTxt(s) {
 function lieu(s) { return [s.cp, s.v].filter(Boolean).join(' '); }
 function plTxt(v) { return v === 1 ? 'Confirmé' : v === 0 ? 'Interdit' : 'Non renseigné'; }
 function divIcon(html) { return L.divIcon({ className: 'cb-icon', html, iconSize: [0, 0], iconAnchor: [0, 0] }); }
-ST.forEach((s, i) => { s.i = i; s.h24 = (s.h || '').trim() === '24/7'; s._nn = nn(`${s.n} ${s.v} ${s.cp}`); });
-const vis = s => state.res[s.r] && (!state.pl || s.pl === 1) && (!state.ad || s.ad === 1) && (!state.h24 || s.h24)
+function prep(s) { s.h24 = (s.h || '').trim() === '24/7'; s._nn = nn(`${s.n} ${s.v} ${s.cp} ${s.code || ''}`); }
+ST.forEach((s, i) => { s.i = i; prep(s); });
+const vis = s => (s.fav ? state.fav : state.res[s.r]) && (!state.pl || s.pl === 1) && (!state.ad || s.ad === 1) && (!state.h24 || s.h24)
   && (!state.sansDoute || s.src !== 'osm_hors');
-const SRC = { officiel: ['src-off', 'Liste officielle Circle K'], osm: ['src-osm', 'OpenStreetMap'],
-              osm_hors: ['src-hors', 'OpenStreetMap, absente de la liste officielle'] };
-const N_HORS = ST.filter(s => s.src === 'osm_hors').length;
+const SRC = { favori: ['src-fav', 'Mes stations (liste Excel)'], officiel: ['src-off', 'Liste officielle Circle K'],
+              osm: ['src-osm', 'OpenStreetMap'], osm_hors: ['src-hors', 'OpenStreetMap, absente de la liste officielle'] };
+const nHors = () => ST.filter(s => s.src === 'osm_hors').length;
+const N_FAV = ST.filter(s => s.fav).length;
 
 // ── Carte ──
-const map = L.map('map', { zoomControl: false, worldCopyJump: true, preferCanvas: false }).setView([49.8, 5.5], 6);
+const map = L.map('map', { zoomControl: false, worldCopyJump: true, preferCanvas: false }).setView([46.6, 2.5], 6);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
 const canvas = L.canvas({ padding: .5 });
-const dots = L.layerGroup().addTo(map);      // toutes les stations visibles (petits points, canvas)
-const zone = L.layerGroup().addTo(map);      // centre, cercle et pastilles des stations du rayon
+const dots = L.layerGroup().addTo(map);      // stations visibles (petits points, canvas)
+const zone = L.layerGroup().addTo(map);      // centre, cercle et pastilles
 let tiles = [], bHalo = null, bLine = null, circle = null;
 const mk = {};
 
@@ -923,10 +933,12 @@ function drawBorders() {
 function popup(s) {
   const r = RES[s.r];
   const tag = (on, t) => `<span class="${on ? 'on' : ''}">${t}</span>`;
-  const l = [`<b style="font-size:14px">${esc(s.n)}</b>`, `<span style="color:${r.c};font-weight:600">${esc(s.e)}</span>`];
+  const l = [`<b style="font-size:14px">${s.fav ? '<span class="star">★</span> ' : ''}${esc(s.n)}</b>`,
+             `<span style="color:${r.c};font-weight:600">${esc(s.e)}</span>${s.code ? ` <span style="color:var(--sub)">· ${esc(s.code)}</span>` : ''}`];
   if (s.a) l.push(esc(s.a));
-  l.push(`${esc(lieu(s))} ${esc(PAYS[s.p] || s.p)}`.trim());
-  const tags = [tag(s.pl === 1, `PL : ${plTxt(s.pl).toLowerCase()}${s.plo ? ' (piste PL officielle)' : ''}`)];
+  l.push(`${esc(lieu(s))} ${esc(PAYS[s.p] || s.p || '')}`.trim());
+  const plNote = s.plo ? ' (piste PL officielle)' : s.pln ? ` (réseau ${esc(s.pln)})` : '';
+  const tags = [tag(s.pl === 1, `PL : ${plTxt(s.pl).toLowerCase()}${plNote}`)];
   if (s.ad === 1) tags.push(tag(true, 'AdBlue'));
   if (s.lng === 1) tags.push(tag(true, 'GNL'));
   if (s.cng === 1) tags.push(tag(true, 'GNC'));
@@ -944,23 +956,31 @@ function popup(s) {
   l.push(liens.join(' · '));
   return l.join('<br>');
 }
+function pastille(s, best, dist) {
+  const r = RES[s.r];
+  const html = `<div class="pp${best ? ' best' : ''}${s.fav ? ' fav' : ''}${s.src === 'osm_hors' ? ' doute' : ''}" style="--c:${r.c}">${r.k}${s.pl === 1 ? '<span class="pl">PL</span>' : ''}</div>`;
+  return L.marker([s.la, s.lo], { icon: divIcon(html), riseOnHover: true, zIndexOffset: best ? 1000 : s.fav ? 200 : 0 })
+    .bindTooltip(`${s.fav ? '★ ' : ''}${esc(s.n)}${dist ? ' · ' + km(s.dist) + ' km' : s.v ? ' · ' + esc(s.v) : ''}${s.px != null ? ' · ' + eurL(s.px) : ''}`, { direction: 'top', offset: [0, -14] })
+    .bindPopup(() => popup(s), { maxWidth: 320 });
+}
 
-// Petits points : reconstruits seulement quand les filtres changent
+// Petits points : reconstruits seulement quand les filtres ou les stations changent
 function renderDots() {
   dots.clearLayers(); for (const k in mk) delete mk[k];
   if (state.hors) {
     const n = ST.filter(vis).length, rad = n > 4000 ? 3.5 : 4.5;
     ST.forEach(s => {
       if (!vis(s)) return;
-      const m = L.circleMarker([s.la, s.lo], { renderer: canvas, radius: rad, color: '#fff', weight: 1.2, fillColor: RES[s.r].c, fillOpacity: s.src === 'osm_hors' ? .45 : .95, bubblingMouseEvents: false })
-        .bindTooltip(() => `${esc(s.n)} (${esc(s.v || PAYS[s.p] || s.p)})`).bindPopup(() => popup(s), { maxWidth: 320 });
+      const m = L.circleMarker([s.la, s.lo], { renderer: canvas, radius: s.fav ? rad + 1 : rad, color: s.fav ? '#ffcc00' : '#fff', weight: s.fav ? 2 : 1.2,
+        fillColor: RES[s.r].c, fillOpacity: s.src === 'osm_hors' ? .45 : .95, bubblingMouseEvents: false })
+        .bindTooltip(() => `${s.fav ? '★ ' : ''}${esc(s.n)} (${esc(s.v || PAYS[s.p] || s.p || '')})`).bindPopup(() => popup(s), { maxWidth: 320 });
       dots.addLayer(m); mk['s' + s.i] = m;
     });
   }
   renderZone();
 }
 
-// Zone : centre, cercle, pastilles des stations du rayon
+// Zone : centre, cercle, pastilles des stations du rayon (sans point : pastilles de mes stations)
 function renderZone() {
   zone.clearLayers();
   if (circle) { map.removeLayer(circle); circle = null; }
@@ -972,10 +992,11 @@ function renderZone() {
     circle = L.circle([c.lat, c.lon], { radius: R * 1000, color: '#e53935', weight: 2, dashArray: '6 6', fillOpacity: .05, interactive: false }).addTo(map);
     zone.addLayer(L.marker([c.lat, c.lon], { icon: divIcon('<div class="cb-centre"></div>'), interactive: false, keyboard: false, zIndexOffset: -1000 }));
     proches = ST.filter(s => vis(s) && s.dist <= R).sort((a, b) => a.dist - b.dist);
-    // Plus proche par réseau (et avec accès PL), même hors rayon
+    // Plus proche de mes stations, par réseau et avec accès PL, même hors rayon
     ST.forEach(s => {
       if (!vis(s)) return;
-      if (!state.best[s.r] || s.dist < state.best[s.r].dist) state.best[s.r] = s;
+      const k = s.fav ? 'fav' : s.r;
+      if (!state.best[k] || s.dist < state.best[k].dist) state.best[k] = s;
       if (s.pl === 1 && (!state.best.pl || s.dist < state.best.pl.dist)) state.best.pl = s;
     });
     const prixRayon = proches.filter(s => s.px != null && s.pxs === 'station');
@@ -984,38 +1005,38 @@ function renderZone() {
     const badges = proches.slice(0, MAX_BADGES);
     const dejaLa = new Set(badges.map(s => s.i));
     Object.values(state.best).forEach(s => { if (!dejaLa.has(s.i)) { badges.push(s); dejaLa.add(s.i); } });
-    badges.reverse().forEach(s => {
-      const r = RES[s.r], best = bestIds.has(s.i);
-      const html = `<div class="pp${best ? ' best' : ''}${s.src === 'osm_hors' ? ' doute' : ''}" style="--c:${r.c}">${r.k}${s.pl === 1 ? '<span class="pl">PL</span>' : ''}</div>`;
-      const m = L.marker([s.la, s.lo], { icon: divIcon(html), riseOnHover: true, zIndexOffset: best ? 1000 : 0 })
-        .bindTooltip(`${esc(s.n)} · ${km(s.dist)} km${s.px != null ? ' · ' + eurL(s.px) : ''}`, { direction: 'top', offset: [0, -14] }).bindPopup(() => popup(s), { maxWidth: 320 });
-      zone.addLayer(m); mk['s' + s.i] = m;
-    });
+    badges.reverse().forEach(s => { const m = pastille(s, bestIds.has(s.i), true); zone.addLayer(m); mk['s' + s.i] = m; });
+  } else if (state.fav) {
+    ST.filter(s => s.fav && vis(s)).slice(0, 800).forEach(s => { const m = pastille(s, false, false); zone.addLayer(m); mk['s' + s.i] = m; });
   }
   state.proches = proches;
   updateInfo(); updateChip(); legend();
   if (document.body.classList.contains('sheet-open')) renderSheet();
 }
 
-function compteParReseau(liste) {
-  const o = {}; RES_ORDRE.forEach(r => o[r] = 0); liste.forEach(s => o[s.r]++); return o;
+function groupes() {
+  return (state.fav ? [['fav', '★ Mes stations', '#a07800']] : [])
+    .concat(RES_ORDRE.filter(r => state.res[r] && (r !== 'autre' || ST.some(s => !s.fav && s.r === 'autre'))).map(r => [r, RES[r].l, RES[r].c]));
 }
+const cle = s => s.fav ? 'fav' : s.r;
+function compte(liste) { const o = {}; liste.forEach(s => o[cle(s)] = (o[cle(s)] || 0) + 1); return o; }
 function updateInfo() {
   const c = state.center;
   const stat = (v, l) => `<div><div class="n">${v}</div><div class="l">${l}</div></div>`;
+  const gr = groupes();
   if (!c) {
-    const n = compteParReseau(ST.filter(vis));
+    const n = compte(ST.filter(vis));
     $('info').innerHTML = `<div class="k">Aucune position</div><div class="t">Choisissez un point</div>
-      <div class="stats">${RES_ORDRE.map(r => stat(n[r].toLocaleString('fr-FR'), RES[r].l)).join('')}</div>
+      <div class="stats">${gr.map(([k, l]) => stat(nb(n[k] || 0), l.replace('★ ', ''))).join('')}</div>
       <div class="s">Recherchez une adresse ou une station dans le panneau, ou cliquez sur la carte.</div>`;
     return;
   }
-  const n = compteParReseau(state.proches), npl = state.proches.filter(s => s.pl === 1).length;
-  const cases = RES_ORDRE.map(r => stat(n[r], RES[r].l)).concat(RES_ORDRE.length < 3 ? [stat(npl, 'PL confirmé')] : []);
+  const n = compte(state.proches), npl = state.proches.filter(s => s.pl === 1).length;
+  const cases = gr.map(([k, l]) => stat(n[k] || 0, l.replace('★ ', ''))).concat(gr.length < 3 ? [stat(npl, 'PL confirmé')] : []);
   const near = (s, titre, col) => s ? `<button class="near" data-i="${s.i}"><div class="top"><span><i style="background:${col}"></i>${titre}</span><b${s.dist > state.rayon ? ' style="color:#b45a00"' : ''}>${km(s.dist)} km</b></div><div class="nn">${esc(s.n)}${s.v ? ' · ' + esc(s.v) : ''}</div></button>` : '';
   $('info').innerHTML = `<div class="k">Rayon de ${state.rayon} km autour de</div><div class="t">${esc(c.label)}</div>
     <div class="stats">${cases.join('')}</div>`
-    + RES_ORDRE.filter(r => state.res[r]).map(r => near(state.best[r], `Plus proche ${RES[r].l}`, RES[r].c)).join('')
+    + gr.map(([k, l, col]) => near(state.best[k], k === 'fav' ? 'Plus proche de mes stations' : `Plus proche ${l}`, k === 'fav' ? '#ffcc00' : col)).join('')
     + near(state.best.pl, 'Plus proche, accès PL confirmé', '#1d1d1f')
     + (state.best.prix ? `<button class="near" data-i="${state.best.prix.i}"><div class="top"><span><i style="background:#00a854"></i>Gazole le moins cher du rayon</span><b style="color:#00873c">${eurL(state.best.prix.px)}/L</b></div><div class="nn">${esc(state.best.prix.n)}${state.best.prix.v ? ' · ' + esc(state.best.prix.v) : ''} · ${km(state.best.prix.dist)} km</div></button>` : '')
     + `<div class="s" style="margin-top:6px">Distances à vol d’oiseau.${state.proches.length ? '' : ' Aucune station dans ce rayon avec les filtres actuels : les plus proches sont plus loin (en orange).'}</div>`;
@@ -1032,46 +1053,269 @@ function focusStation(s) {
 function updateChip() {
   const n = state.center ? state.proches.length : ST.filter(vis).length;
   $('chip-txt').textContent = state.center ? 'Afficher les stations du rayon' : 'Afficher toutes les stations';
-  $('chip-n').textContent = n.toLocaleString('fr-FR');
+  $('chip-n').textContent = nb(n);
 }
 function legend() {
   const it = (html, t) => `<div>${html}${t}</div>`;
   const rond = c => `<i style="width:12px;height:12px;border-radius:50%;background:${c};border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3)"></i>`;
-  $('legend').innerHTML = RES_ORDRE.map(r => it(rond(RES[r].c), RES[r].l)).concat([
+  const gr = RES_ORDRE.filter(r => state.res[r] && ST.some(s => !s.fav && s.r === r));
+  $('legend').innerHTML = [it('<i style="width:12px;height:12px;border-radius:50%;background:#2f6bff;border:2px solid #ffcc00;box-shadow:0 1px 3px rgba(0,0,0,.3)"></i>', 'Mes stations')]
+    .concat(gr.map(r => it(rond(RES[r].c), RES[r].l))).concat([
     it('<i style="background:#1d1d1f;color:#fff;border:1.5px solid #fff;border-radius:5px;font:700 8px/11px var(--font);padding:0 3px;box-shadow:0 1px 3px rgba(0,0,0,.3)">PL</i>', 'Accès PL confirmé'),
     it('<i style="width:12px;height:12px;border-radius:50%;border:3px solid #e53935;background:#fff"></i>', 'Centre de recherche'),
-  ]).concat(N_HORS ? [it('<i style="width:12px;height:12px;border-radius:50%;background:#8e8e93;opacity:.5;box-shadow:0 0 0 1.5px #fff"></i>', 'Non confirmée (hors liste officielle)')] : []).join('');
+  ]).concat(nHors() ? [it('<i style="width:12px;height:12px;border-radius:50%;background:#8e8e93;opacity:.5;box-shadow:0 0 0 1.5px #fff"></i>', 'Non confirmée (hors liste officielle)')] : []).join('');
 }
 
 function setCenter(c, fit = true) {
   state.center = c; renderZone();
   if (fit && circle) fitTo(circle.getBounds());
+  if (state.zone === 'rayon') planifierRecherche();
 }
+function paysDuCentre(cc) {
+  cc = (cc || '').toUpperCase();
+  if (!cc || !PAYS[cc] || state.paysManuel) return;
+  state.paysRech = cc; $('pays-rech').value = cc;
+  if (state.zone === 'pays') planifierRecherche();
+}
+
+// ══ Recherche des autres stations (OpenStreetMap via Overpass, depuis le navigateur) ══
+const RX_AS24 = /\bAS ?24\b/, RX_CK = /\bCIRCLE ?K\b/, RX_TOTAL_BRAND = /^(TOTAL ?ENERGIES|TOTAL|ELAN)\b/,
+      RX_TOTAL = /\bTOTAL ?ENERGIES\b|^TOTAL\b|\bTOTAL ACCESS\b/;
+function classer(t) {   // la marque décide si elle est renseignée ; sinon le nom, puis l'exploitant
+  for (const champ of ['brand', 'name', 'operator']) {
+    const v = nn(t[champ]); if (!v) continue;
+    if (RX_AS24.test(v)) return 'as24';
+    if (RX_CK.test(v)) return 'circlek';
+    if ((champ === 'brand' ? RX_TOTAL_BRAND : RX_TOTAL).test(v)) return 'total';
+    if (champ === 'brand') return null;     // autre marque explicite (Esso, Q8…)
+  }
+  return null;
+}
+function enseigne(r, t) {
+  const txt = nn(`${t.brand || ''} ${t.name || ''}`);
+  if (r === 'total') return /\bELAN\b/.test(nn(t.brand)) ? 'Elan (TotalEnergies)' : txt.includes('ACCESS') ? 'TotalEnergies Access' : 'TotalEnergies';
+  if (r === 'circlek') return txt.includes('TRUCK') ? 'Circle K Truck' : 'Circle K';
+  return 'AS24';
+}
+function ouiNon(v) { v = (v || '').trim().toLowerCase(); return ['yes', 'designated', 'only'].includes(v) ? 1 : v === 'no' ? 0 : null; }
+function accesPL(r, t) {
+  if (r === 'as24') return 1;
+  if (ouiNon(t['fuel:HGV_diesel']) === 1 || ouiNon(t.hgv) === 1) return 1;
+  if (nn(`${t.brand || ''} ${t.name || ''}`).includes('TRUCK')) return 1;
+  if (ouiNon(t.hgv) === 0) return 0;
+  return null;
+}
+function requete(filtre, tmo) {
+  const reg = (k, x) => `nwr${filtre}["amenity"="fuel"]["${k}"~"${x}",i];`;
+  return `[out:json][timeout:${tmo}];${filtre.startsWith('(area') ? `area["ISO3166-1"="${state.paysRech}"]["admin_level"="2"]->.a;` : ''}(`
+    + reg('brand', 'total|circle ?k|as ?24|^elan') + reg('name', 'total|circle ?k|as ?24') + reg('operator', 'total|circle ?k|as ?24')
+    + ');out center tags;';
+}
+async function overpass(q, tmo, signal) {
+  const err = [];
+  for (const url of D.overpass) {
+    const hote = new URL(url).host;
+    for (let essai = 0; essai < 2; essai++) {
+      if (signal.aborted) throw new DOMException('annulé', 'AbortError');
+      const ctl = new AbortController(), stop = () => ctl.abort();
+      signal.addEventListener('abort', stop, { once: true });
+      const t = setTimeout(stop, (tmo + 20) * 1000);
+      try {
+        const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
+        if (!r.ok) {
+          err.push(`${hote} : HTTP ${r.status}`);
+          if ([429, 502, 503, 504].includes(r.status) && essai === 0) { await new Promise(ok => setTimeout(ok, 6000)); continue; }
+          break;
+        }
+        const j = await r.json();
+        if (/runtime error/i.test(j.remark || '')) { err.push(`${hote} : réponse incomplète`); break; }
+        return j;
+      } catch (e) {
+        if (signal.aborted) throw e;
+        err.push(`${hote} : ${e.name === 'AbortError' ? 'délai dépassé' : 'injoignable'}`);
+        break;
+      } finally { clearTimeout(t); signal.removeEventListener('abort', stop); }
+    }
+  }
+  throw new Error(err.join(' ; '));
+}
+
+// Index spatial (~150 m) des stations déjà sur la carte, pour fusionner les doublons
+const grille = new Map();
+const gk = (la, lo) => `${Math.round(la * 300)}:${Math.round(lo * 200)}`;
+function indexer(s) { const k = gk(s.la, s.lo); if (!grille.has(k)) grille.set(k, []); grille.get(k).push(s); }
+function voisins(la, lo, metres, test) {
+  const a = Math.round(la * 300), b = Math.round(lo * 200);
+  let best = null, dmin = metres / 1000;
+  for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (const s of grille.get(`${a + x}:${b + y}`) || []) {
+    if (test && !test(s)) continue;
+    const d = hav(la, lo, s.la, s.lo); if (d <= dmin) { best = s; dmin = d; }
+  }
+  return best;
+}
+ST.forEach(indexer);
+const vusOsm = new Set(ST.map(s => s.id).filter(Boolean));
+const ckAjoutes = new Set();
+
+// Prix officiels France : par l'identifiant du flux stocké dans OSM, sinon le point le plus proche à moins de 120 m
+const PRIX = D.prix_fr || [];               // [lat, lon, id, prix, maj, piste PL]
+const prixId = new Map(), prixGrille = new Map();
+PRIX.forEach(p => { if (p[2]) prixId.set(p[2], p); const k = `${Math.round(p[0] * 100)}:${Math.round(p[1] * 70)}`; if (!prixGrille.has(k)) prixGrille.set(k, []); prixGrille.get(k).push(p); });
+function lierPrix(s, refFr) {
+  let p = refFr ? prixId.get(refFr) : null;
+  if (!p) {
+    const a = Math.round(s.la * 100), b = Math.round(s.lo * 70); let dmin = .12;
+    for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (const q of prixGrille.get(`${a + x}:${b + y}`) || []) {
+      const d = hav(s.la, s.lo, q[0], q[1]); if (d < dmin) { p = q; dmin = d; }
+    }
+  }
+  if (p) {
+    if (!s.p) s.p = 'FR';
+    if (p[3] != null && s.p === 'FR') { s.px = p[3]; s.pxm = p[4]; s.pxs = 'station'; }
+    if (p[5] && s.p === 'FR') { s.pl = 1; s.plo = 1; }
+  }
+  if (s.px == null && s.p === 'BE' && D.prix_be) { s.px = D.prix_be.px; s.pxm = D.prix_be.label; s.pxs = 'max'; }
+}
+function enrichir(cible, s) {
+  for (const k of ['pl', 'ad', 'lng', 'cng']) if (cible[k] == null && s[k] != null) cible[k] = s[k];
+  for (const k of ['h', 't', 'w', 'id']) if (!cible[k] && s[k]) cible[k] = s[k];
+  if (cible.px == null && s.px != null) { cible.px = s.px; cible.pxm = s.pxm; cible.pxs = s.pxs; }
+  prep(cible);
+}
+function ajouter(s) { s.i = ST.length; ST.push(s); prep(s); indexer(s); if (s.id) vusOsm.add(s.id); }
+
+function versStation(el, ccZone) {
+  const t = el.tags || {};
+  const la = el.lat ?? el.center?.lat, lo = el.lon ?? el.center?.lon;
+  if (la == null || lo == null || la < EUROPE.s || la > EUROPE.n || lo < EUROPE.w || lo > EUROPE.e) return null;
+  const r = classer(t); if (!r) return null;
+  const pc = (t['addr:country'] || '').toUpperCase().slice(0, 2);
+  return {
+    r, e: enseigne(r, t), n: t.name || t.brand || RES[r].l, a: [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' '),
+    cp: t['addr:postcode'] || '', v: t['addr:city'] || t['addr:place'] || '', p: ccZone || (PAYS[pc] ? pc : ''),
+    la: +(+la).toFixed(6), lo: +(+lo).toFixed(6), pl: accesPL(r, t), ad: ouiNon(t['fuel:adblue']), lng: ouiNon(t['fuel:lng']), cng: ouiNon(t['fuel:cng']),
+    h: t.opening_hours || '', t: t.phone || t['contact:phone'] || '', w: t.website || t['contact:website'] || '',
+    id: `${el.type || 'node'}/${el.id}`, src: 'osm', _ref: (t['ref:FR:prix-carburants'] || '').replace(/\D/g, ''), _nt: Object.keys(t).length,
+  };
+}
+// Intègre une réponse Overpass (et la liste officielle Circle K de la même zone) aux stations de la carte
+function integrer(data, dansZone, ccZone) {
+  let n = 0;
+  // 1. liste officielle Circle K (BE, LU, NL, DE) de la zone, avant OSM : elle fait foi
+  for (const o of D.ck || []) {
+    if (ckAjoutes.has(o.code) || !dansZone(o)) continue;
+    ckAjoutes.add(o.code);
+    const f = voisins(o.la, o.lo, 150, s => s.fav);
+    if (f) { enrichir(f, o); continue; }
+    const s = { ...o }; lierPrix(s); ajouter(s); n++;
+  }
+  // 2. OpenStreetMap, fiche la plus complète d'abord (une station dessinée en point et en surface)
+  const els = (data.elements || []).map(el => versStation(el, ccZone)).filter(Boolean).sort((a, b) => b._nt - a._nt);
+  for (const s of els) {
+    if (vusOsm.has(s.id)) continue;
+    vusOsm.add(s.id);
+    const f = voisins(s.la, s.lo, 150, x => x.fav);
+    if (f) { if (!f.id) f.id = s.id; enrichir(f, s); continue; }                       // déjà dans mes stations
+    if (voisins(s.la, s.lo, 80, x => !x.fav && x.r === s.r && x.src !== 'officiel')) continue;   // doublon point / surface
+    if (s.r !== 'as24') {
+      const o = voisins(s.la, s.lo, 250, x => x.src === 'officiel');
+      if (o) { if (!o.id) o.id = s.id; enrichir(o, s); continue; }                     // fusion avec la liste officielle
+    }
+    lierPrix(s, s._ref);
+    if (D.ck && D.ck.length && CK_PAYS.has(s.p) && s.r !== 'as24') s.src = 'osm_hors';
+    delete s._ref; delete s._nt;
+    ajouter(s); n++;
+  }
+  return n;
+}
+
+const deja = { cercles: [], pays: new Set() };
+let rechCtl = null, rechTmr = null;
+const actifs = () => RES_RECH.filter(r => state.res[r]);
+function etat(html, cl = '', spin = false) { $('rech-etat').className = 'etat ' + cl; $('rech-etat').innerHTML = (spin ? '<span class="spin"></span>' : '') + `<span>${html}</span>`; }
+function etatRepos(avant = '') {
+  const a = actifs();
+  if (!a.length) { etat(avant + 'Activez un réseau : la recherche part sur OpenStreetMap' + (state.zone === 'rayon' ? ', dans le rayon autour du point choisi.' : `, dans tout le pays choisi.`)); return; }
+  if (state.zone === 'rayon' && !state.center) { etat(avant + 'Choisissez un point (adresse, clic sur la carte ou ma position) : la recherche se lance dans le rayon. Ou passez sur « Tout le pays ».'); return; }
+  const n = compte(ST.filter(s => !s.fav));
+  const zoneTxt = state.zone === 'rayon' ? `${state.rayon} km autour du point` : `${PAYS[state.paysRech] || state.paysRech} (tout le pays)`;
+  etat(avant + `${a.map(r => `${RES[r].l} : <b>${nb(n[r] || 0)}</b>`).join(' · ')} trouvée(s) au total. Zone parcourue : ${zoneTxt}.`, 'ok');
+}
+function majCompteurs() {
+  const n = compte(ST.filter(s => !s.fav));
+  RES_RECH.forEach(r => {
+    const el = $('n-' + r); if (!el) return;
+    el.textContent = state.res[r] || n[r] ? `${nb(n[r] || 0)} trouvée(s) · ${RES[r].s}` : `${RES[r].s} · cherchées à l’activation`;
+  });
+}
+function couvert() {
+  if (state.zone === 'pays') return deja.pays.has(state.paysRech);
+  const c = state.center; if (!c) return true;
+  return deja.cercles.some(z => hav(z.lat, z.lon, c.lat, c.lon) + state.rayon <= z.r + .01);
+}
+function planifierRecherche(delai = 350) {
+  clearTimeout(rechTmr);
+  rechTmr = setTimeout(rechercher, delai);
+}
+async function rechercher() {
+  if (!actifs().length || (state.zone === 'rayon' && !state.center)) { etatRepos(); return; }
+  if (couvert()) { etatRepos(); return; }
+  if (rechCtl) rechCtl.abort();
+  const ctl = rechCtl = new AbortController();
+  let q, tmo, dansZone, cc = '', libelle, zoneOk = null;
+  if (state.zone === 'rayon') {
+    const c = state.center, R = state.rayon;
+    tmo = 90; q = requete(`(around:${Math.round(R * 1000)},${c.lat.toFixed(5)},${c.lon.toFixed(5)})`, tmo);
+    dansZone = s => hav(c.lat, c.lon, s.la, s.lo) <= R;
+    libelle = `dans un rayon de ${R} km`;
+    zoneOk = { lat: c.lat, lon: c.lon, r: R };
+  } else {
+    cc = state.paysRech; tmo = 240; q = requete('(area.a)', tmo);
+    dansZone = s => s.p === cc;
+    libelle = `dans tout le pays : ${PAYS[cc] || cc}`;
+  }
+  etat(`Recherche ${libelle}…${state.zone === 'pays' ? ' Jusqu’à une minute pour un grand pays.' : ''}`, '', true);
+  try {
+    const data = await overpass(q, tmo, ctl.signal);
+    if (ctl !== rechCtl) return;
+    const n = integrer(data, dansZone, cc);
+    if (state.zone === 'rayon') deja.cercles.push(zoneOk); else deja.pays.add(cc);
+    rechCtl = null;
+    renderDots(); majCompteurs(); facts();
+    etatRepos(n ? `${nb(n)} nouvelle(s) station(s) ${libelle}. ` : `Aucune nouvelle station ${libelle}. `);
+  } catch (e) {
+    if (e.name === 'AbortError' && ctl !== rechCtl) return;
+    rechCtl = null;
+    etat(`OpenStreetMap n’a pas répondu (${esc(e.message)}). <button class="lien" id="relancer">Réessayer</button>`, 'err');
+  }
+}
+$('rech-etat').addEventListener('click', e => { if (e.target.id === 'relancer') rechercher(); });
 
 // ── Recherche d'adresse ──
 let tmr = null, resultats = [], actif = -1;
 function afficherResultats() {
   const ul = $('results');
   if (!resultats.length) { ul.innerHTML = '<li class="vide">Aucun résultat. Essayez avec le code postal.</li>'; ul.classList.add('show'); return; }
-  ul.innerHTML = resultats.map((r, i) => `<li role="option" data-i="${i}" class="${i === actif ? 'active' : ''}">${esc(r.label)}<small>${esc(r.sub)}</small></li>`).join('');
+  ul.innerHTML = resultats.map((r, i) => `<li role="option" data-i="${i}" class="${i === actif ? 'active' : ''}">${r.fav ? '<span class="star">★</span> ' : ''}${esc(r.label)}<small>${esc(r.sub)}</small></li>`).join('');
   ul.classList.add('show');
 }
 async function chercherAdresse(q) {
   const qn = nn(q);
-  const loc = qn.length >= 3 ? ST.filter(s => s._nn.includes(qn)).slice(0, 3)
-    .map(s => ({ label: s.n, sub: `${s.e}, ${[lieu(s), PAYS[s.p] || s.p].filter(Boolean).join(', ')}`, lat: s.la, lon: s.lo })) : [];
+  const loc = qn.length >= 3 ? ST.filter(s => s._nn.includes(qn)).sort((a, b) => (b.fav || 0) - (a.fav || 0)).slice(0, 4)
+    .map(s => ({ label: s.n, sub: `${s.e}, ${[lieu(s), PAYS[s.p] || s.p].filter(Boolean).join(', ')}`, lat: s.la, lon: s.lo, cc: s.p, fav: s.fav })) : [];
   let geo = [];
   try {
     const j = await (await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=fr`)).json();
     geo = (j.features || []).map(f => {
       const p = f.properties || {}, [lo, la] = f.geometry.coordinates;
       const rue = [p.street, p.housenumber].filter(Boolean).join(' ');
-      return { label: p.name || rue || p.city || q, sub: [p.name ? rue : '', [p.postcode, p.city].filter(Boolean).join(' '), p.country].filter(Boolean).join(', '), lat: la, lon: lo };
+      return { label: p.name || rue || p.city || q, sub: [p.name ? rue : '', [p.postcode, p.city].filter(Boolean).join(' '), p.country].filter(Boolean).join(', '), lat: la, lon: lo, cc: p.countrycode };
     });
   } catch (e) {
     try {
-      const j = await (await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5`)).json();
-      geo = j.map(d => ({ label: d.display_name.split(',')[0], sub: d.display_name.split(',').slice(1, 4).join(',').trim(), lat: +d.lat, lon: +d.lon }));
+      const j = await (await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`)).json();
+      geo = j.map(d => ({ label: d.display_name.split(',')[0], sub: d.display_name.split(',').slice(1, 4).join(',').trim(), lat: +d.lat, lon: +d.lon, cc: d.address?.country_code }));
     } catch (e2) { }
   }
   if ($('q').value.trim() !== q) return;
@@ -1080,6 +1324,7 @@ async function chercherAdresse(q) {
 function choisir(i) {
   const r = resultats[i]; if (!r) return;
   $('q').value = r.label; $('results').classList.remove('show');
+  paysDuCentre(r.cc);
   setCenter({ lat: r.lat, lon: r.lon, label: [r.label, r.sub].filter(Boolean).join(', ') });
 }
 $('q').addEventListener('input', () => {
@@ -1104,7 +1349,7 @@ async function libelleInverse(c) {
     const p = (j.features || [])[0]?.properties;
     if (p && state.center === c) {
       c.label = [[p.street, p.housenumber].filter(Boolean).join(' '), [p.postcode, p.city || p.name].filter(Boolean).join(' '), p.country].filter(Boolean).join(', ') || c.label;
-      updateInfo();
+      updateInfo(); paysDuCentre(p.countrycode);
     }
   } catch (err) { }
 }
@@ -1128,17 +1373,29 @@ function majRayon() {
   r.style.setProperty('--p', `${(r.value - r.min) / (r.max - r.min) * 100}%`);
 }
 $('rayon').addEventListener('input', () => { majRayon(); state.rayon = +$('rayon').value; renderZone(); });
-$('rayon').addEventListener('change', () => { if (circle) fitTo(circle.getBounds()); });
-$('reseaux').innerHTML = RES_ORDRE.map(r => {
-  const n = ST.filter(s => s.r === r).length.toLocaleString('fr-FR');
-  return `<label class="row"><span class="nm"><span class="dot" style="background:${RES[r].c}">${RES[r].k}</span><span>${RES[r].l}<br><small>${n} ${RES[r].s}</small></span></span><span class="sw"><input type="checkbox" data-r="${r}" checked><span></span></span></label>`;
-}).join('');
-$('reseaux').addEventListener('change', e => { const r = e.target.dataset.r; if (!r) return; state.res[r] = e.target.checked; renderDots(); });
+$('rayon').addEventListener('change', () => { if (circle) fitTo(circle.getBounds()); if (state.zone === 'rayon') planifierRecherche(); });
+$('fav-n').textContent = `${nb(N_FAV)} station(s)${D.fav_fichier ? ' · ' + D.fav_fichier : ''}`;
+$('t-fav').addEventListener('change', e => { state.fav = e.target.checked; renderDots(); });
+$('reseaux').innerHTML = RES_RECH.map(r =>
+  `<label class="row"><span class="nm"><span class="dot" style="background:${RES[r].c}">${RES[r].k}</span><span>${RES[r].l}<br><small id="n-${r}"></small></span></span><span class="sw"><input type="checkbox" data-r="${r}"><span></span></span></label>`).join('');
+$('reseaux').addEventListener('change', e => {
+  const r = e.target.dataset.r; if (!r) return;
+  state.res[r] = e.target.checked; renderDots(); majCompteurs();
+  if (e.target.checked) rechercher(); else etatRepos();
+});
+$('pays-rech').innerHTML = Object.entries(PAYS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+$('pays-rech').value = state.paysRech;
+$('pays-rech').addEventListener('change', e => { state.paysRech = e.target.value; state.paysManuel = true; rechercher(); });
+$('zone').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.zone = b.dataset.z; [...$('zone').children].forEach(x => x.classList.toggle('on', x === b));
+  $('pays-rech').style.display = state.zone === 'pays' ? 'block' : 'none';
+  rechercher();
+});
 $('f-pl').addEventListener('change', e => { state.pl = e.target.checked; renderDots(); });
 $('f-ad').addEventListener('change', e => { state.ad = e.target.checked; renderDots(); });
 $('f-24').addEventListener('change', e => { state.h24 = e.target.checked; renderDots(); });
 $('f-hors').addEventListener('change', e => { state.sansDoute = e.target.checked; renderDots(); });
-if (!N_HORS) $('row-hors').style.display = 'none';
 $('fonds').innerHTML = Object.keys(FONDS).map(k => `<button data-f="${k}" class="${k === state.fond ? 'on' : ''}">${k}</button>`).join('');
 $('fonds').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -1165,8 +1422,9 @@ $('tbl').addEventListener('click', e => {
 
 const oui = v => v === 1 ? '<span class="ok">Oui</span>' : v === 0 ? '<span class="ko">Non</span>' : '<span class="nr">—</span>';
 const COLS = [
+  ['fav', '★', '', v => v ? '<span class="star">★</span>' : '', s => s.fav ? 'Oui' : ''],
   ['r', 'Réseau', '', (v, s) => `<span class="badge" style="background:${RES[v].c}">${RES[v].l}</span>`, s => RES[s.r].l],
-  ['n', 'Station'], ['e', 'Enseigne'], ['a', 'Adresse'], ['cp', 'CP'], ['v', 'Localité'],
+  ['n', 'Station'], ['e', 'Enseigne'], ['code', 'Code'], ['a', 'Adresse'], ['cp', 'CP'], ['v', 'Localité'],
   ['p', 'Pays', '', v => esc(PAYS[v] || v), s => PAYS[s.p] || s.p],
   ['dist', 'Distance (km)', 'num', v => km(v), s => s.dist == null ? '' : Math.round(s.dist * 10) / 10],
   ['pl', 'Accès PL', '', v => v === 1 ? '<span class="ok">Confirmé</span>' : v === 0 ? '<span class="ko">Interdit</span>' : '<span class="nr">—</span>', s => plTxt(s.pl)],
@@ -1180,7 +1438,7 @@ const COLS = [
 ];
 function lignes() {
   let rows = state.center ? state.proches : ST.filter(vis);
-  if (state.filtre) rows = rows.filter(s => nn(`${s.n} ${s.e} ${s.a} ${s.cp} ${s.v} ${PAYS[s.p] || s.p}`).includes(state.filtre));
+  if (state.filtre) rows = rows.filter(s => nn(`${s.n} ${s.e} ${s.code || ''} ${s.a} ${s.cp} ${s.v} ${PAYS[s.p] || s.p}`).includes(state.filtre));
   const { key, dir } = state.sort;
   return rows.slice().sort((a, b) => {
     const x = a[key], y = b[key]; if (x == null && y == null) return 0; if (x == null || x === '') return 1; if (y == null || y === '') return -1;
@@ -1188,7 +1446,7 @@ function lignes() {
   });
 }
 function renderSheet() {
-  $('sheet-ttl').textContent = state.center ? `Stations à moins de ${state.rayon} km` : 'Toutes les stations';
+  $('sheet-ttl').textContent = state.center ? `Stations à moins de ${state.rayon} km` : 'Toutes les stations affichées';
   const rows = lignes();
   if (!rows.length) {
     $('tbl').innerHTML = `<div class="empty">${state.center ? `Aucune station dans un rayon de ${state.rayon} km avec les filtres actuels.` : 'Aucune station avec les filtres actuels.'}</div>`;
@@ -1197,13 +1455,13 @@ function renderSheet() {
   const { key, dir } = state.sort;
   const th = COLS.map(([k, l, cl]) => `<th data-k="${k}" class="${cl || ''}">${esc(l)}${k === key ? ` <span class="arr">${dir > 0 ? '↑' : '↓'}</span>` : ''}</th>`).join('');
   const body = rows.slice(0, MAX_LIGNES).map(s => `<tr class="click" data-i="${s.i}">${COLS.map(([k, , cl, fmt]) => `<td class="${cl || ''}">${fmt ? fmt(s[k], s) : esc(s[k] ?? '')}</td>`).join('')}</tr>`).join('');
-  const plus = rows.length > MAX_LIGNES ? `<div class="more">${MAX_LIGNES} premières lignes sur ${rows.length.toLocaleString('fr-FR')}. L’export contient tout.</div>` : '';
+  const plus = rows.length > MAX_LIGNES ? `<div class="more">${MAX_LIGNES} premières lignes sur ${nb(rows.length)}. L’export contient tout.</div>` : '';
   $('tbl').innerHTML = `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>${plus}`;
 }
 $('export').addEventListener('click', () => {
   const rows = lignes(); if (!rows.length) return;
-  const data = rows.map(s => Object.fromEntries(COLS.map(([k, l, , , ex]) => [l, ex ? ex(s) : (s[k] ?? '')])));
-  const nom = state.center ? 'pompes_rayon' : 'pompes_toutes';
+  const data = rows.map(s => Object.fromEntries(COLS.map(([k, l, , , ex]) => [k === 'fav' ? 'Mes stations' : l, ex ? ex(s) : (s[k] ?? '')])));
+  const nom = state.center ? 'pompes_rayon' : 'pompes_affichees';
   if (window.XLSX) {
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Stations');
     XLSX.writeFile(wb, `${nom}.xlsx`);
@@ -1215,28 +1473,33 @@ $('export').addEventListener('click', () => {
 });
 
 // ── Démarrage ──
-const parPays = {}; ST.forEach(s => parPays[s.p] = (parPays[s.p] || 0) + 1);
-const nPL = ST.filter(s => s.pl === 1).length;
-$('facts').innerHTML = `<b>${ST.length.toLocaleString('fr-FR')}</b> stations sur la carte : `
-  + Object.entries(parPays).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${esc(PAYS[p] || p)} ${n.toLocaleString('fr-FR')}`).join(', ') + '.'
-  + `<br><b>${nPL.toLocaleString('fr-FR')}</b> avec accès poids lourds confirmé.`
-  + (D.n_officiel ? `<br><b>${D.n_officiel.toLocaleString('fr-FR')}</b> issues de la liste officielle Circle K (BE, LU, NL, DE : ancien réseau TotalEnergies ; en BE et LU, pompes TotalEnergies et boutique Circle K)`
-      + (N_HORS ? `, ${N_HORS} station(s) OpenStreetMap non confirmée(s).` : '.') : '')
-  + (D.prix_le ? `<br>Prix du gazole relevés le ${esc(D.prix_le)} : affichés station par station en France (flux officiel), maximum officiel en Belgique.` : '')
-  + `<br>Ailleurs : OpenStreetMap${D.osm ? `, données du ${esc(D.osm)}` : ''}. Base préparée le ${esc(D.generated)} dans le HUB.`
-  + (D.manquants && D.manquants.length ? `<br>Pays non chargés : ${D.manquants.map(p => esc(PAYS[p] || p)).join(', ')}.` : '');
-majRayon(); legend(); applyFond(); renderDots();
-if (ST.length) fitTo(L.latLngBounds(ST.map(s => [s.la, s.lo])));
+function facts() {
+  const fav = ST.filter(s => s.fav), autres = ST.filter(s => !s.fav);
+  const parPays = {}; fav.forEach(s => parPays[s.p || '?'] = (parPays[s.p || '?'] || 0) + 1);
+  const nPx = fav.filter(s => s.px != null && s.pxs === 'station').length;
+  $('facts').innerHTML = `<b>${nb(fav.length)}</b> stations dans ma liste${D.fav_fichier ? ` (${esc(D.fav_fichier)})` : ''} : `
+    + Object.entries(parPays).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${esc(PAYS[p] || p)} ${nb(n)}`).join(', ') + '.'
+    + (nPx ? `<br>Prix du gazole affiché pour <b>${nb(nPx)}</b> d’entre elles (flux officiel français, relevé le ${esc(D.prix_le)}).` : '')
+    + (autres.length ? `<br><b>${nb(autres.length)}</b> autres stations chargées : OpenStreetMap${D.ck && D.ck.length ? ', et liste officielle Circle K en BE, LU, NL et DE (en BE et LU, pompes TotalEnergies, boutique Circle K)' : ''}.` : '')
+    + (nHors() ? ` ${nHors()} station(s) OpenStreetMap non confirmée(s) par la liste officielle.` : '')
+    + (D.prix_be ? `<br>Belgique : prix maximum officiel du gasoil routier.` : '')
+    + `<br>Carte préparée le ${esc(D.generated)} dans le HUB.`;
+  $('row-hors').style.display = nHors() ? '' : 'none';
+}
+majRayon(); facts(); majCompteurs(); etatRepos(); legend(); applyFond(); renderDots();
+if (N_FAV) fitTo(L.latLngBounds(ST.filter(s => s.fav).map(s => [s.la, s.lo])));
 </script>
 </body>
 </html>
 '''
 
 
-def build_app_html(stations: list, osm: str, manquants: list, borders, n_officiel: int = 0, prix_le: str = "") -> str:
+def build_app_html(favorites: list, borders, extra: dict, fav_fichier: str = "") -> str:
     payload = {
-        "prix_le": prix_le,
-        "stations": stations, "osm": osm, "manquants": manquants, "pays_noms": PAYS, "n_officiel": n_officiel,
+        "stations": favorites, "fav_fichier": fav_fichier, "pays_noms": PAYS, "overpass": OVERPASS_URLS,
+        "pays_defaut": "FR" if any(f["p"] == "FR" for f in favorites) or not favorites else favorites[0]["p"],
+        "prix_fr": extra.get("prix_fr", []), "prix_le": extra.get("prix_le", ""), "prix_be": extra.get("prix_be"),
+        "ck": extra.get("ck", []),
         "generated": datetime.now().strftime("%d/%m/%Y à %H:%M"),
     }
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
@@ -1285,174 +1548,150 @@ def excel_base(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
-# ─── Page de préparation ─────────────────────────────────────────────────────
-ui.section("Zone et réseaux")
-c1, c2 = st.columns([2, 1])
-with c1:
-    pays_sel = st.multiselect("Pays", list(PAYS), default=PAYS_DEFAUT, format_func=lambda c: PAYS[c], key="pompes_pays")
-with c2:
-    res_sel = [r for r, lbl in RESEAUX.items() if st.checkbox(lbl, value=True, key=f"pompes_{r}")]
-st.caption("Chaque pays est chargé une fois depuis OpenStreetMap puis gardé 7 jours. "
-           "Premier chargement : de quelques secondes (Luxembourg) à une minute (France, Allemagne).")
-
-if not pays_sel or not res_sel:
-    st.info("Choisissez au moins un pays et un réseau.")
-    st.stop()
-
-stations, manquants, dates, raisons = [], [], [], {}
-barre = st.progress(0.0, text="Chargement des stations…")
-for i, cc in enumerate(pays_sel):
-    barre.progress(i / len(pays_sel), text=f"Chargement des stations : {PAYS[cc]}…")
+# ─── Page ────────────────────────────────────────────────────────────────────
+ui.section("Mes stations")
+source = fichier_favorites()
+favorites, remarques = [], []
+if source is not None:
     try:
-        res = stations_pays(cc)
+        favorites, remarques = favorites_depuis(str(source), source.stat().st_mtime)
     except Exception as e:  # noqa: BLE001
-        manquants.append(cc)
-        raisons[cc] = str(e)
-        continue
-    stations += [s for s in res["stations"] if s["r"] in res_sel]
-    if res["osm"]:
-        dates.append(res["osm"])
-barre.empty()
+        st.error(f"La liste {source.name} n’a pas pu être lue : {e}")
+nom_liste = "liste importée depuis cette page" if source == FAV_LOCAL else (source.name if source else "")
 
-# Liste officielle Circle K pour BE / LU / NL / DE (ancien réseau TotalEnergies)
-pays_ck = CK_PAYS & set(pays_sel)
-n_off, n_fus, off_ok = 0, 0, None
-if pays_ck and ({"total", "circlek"} & set(res_sel)):
-    try:
-        with st.spinner("Liste officielle Circle K…"):
-            officiel = circlek_officiel()
-        if "LU" in pays_ck:
-            try:
-                with st.spinner("Services des stations Circle K Luxembourg…"):
-                    serv = circlek_lu_services()
-                for o in officiel:
-                    sv = serv.get(norm(o["n"]))
-                    if o["p"] == "LU" and sv:
-                        o["pl"] = sv["pl"] if sv["pl"] is not None else o["pl"]
-                        o["ad"] = sv["ad"] if sv["ad"] is not None else o["ad"]
-                        o["w"] = sv["w"]
-            except Exception:  # noqa: BLE001
-                st.caption("Fiches circlek.lu indisponibles : pas de détail Pompe PL / AdBlue pour le Luxembourg cette fois.")
-        officiel = [o for o in officiel if o["r"] in res_sel]
-        stations, n_fus = fusionner_officiel(stations, officiel, pays_ck)
-        n_off = sum(1 for o in officiel if o["p"] in pays_ck)
-        off_ok = True
-    except Exception:  # noqa: BLE001
-        off_ok = False
-        st.warning("La liste officielle Circle K n’a pas répondu : la Belgique, le Luxembourg, les Pays-Bas et "
-                   "l’Allemagne s’affichent avec les données OpenStreetMap seules.")
+if favorites:
+    dff = pd.DataFrame(favorites)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Stations dans ma liste", f"{len(dff):,}".replace(",", " "))
+    m2.metric("Accès PL", f"{int((dff['pl'] == 1).sum()):,}".replace(",", " "))
+    m3.metric("Pays", ", ".join(PAYS.get(c, c) for c in dff["p"].value_counts().index if c) or "—")
+    reseaux_txt = ", ".join(f"{v} {k}" for k, v in dff["e"].value_counts().items())
+    groupes = ", ".join(sorted({g for g in dff["grp"] if g}))
+    st.caption(f"Source : {nom_liste}{f' ({groupes})' if groupes else ''}. {reseaux_txt}. "
+               "Elles s’affichent dès l’ouverture de la carte.")
+    for r in remarques:
+        st.caption(r)
+else:
+    st.info("Aucune liste de stations préférées : importez un fichier Excel ci-dessous.")
 
-# Prix affichés
-n_prix_fr, prix_be, err_prix = 0, None, []
-if "FR" in pays_sel and any(s["p"] == "FR" for s in stations):
-    try:
-        with st.spinner("Prix officiels des stations françaises…"):
-            n_prix_fr = lier_prix_france(stations, prix_france())
-    except Exception as e:  # noqa: BLE001
-        err_prix.append(f"France : {e}")
-if "BE" in pays_sel:
-    try:
-        prix_be = prix_max_belgique()
-        for s in stations:
-            if s["p"] == "BE" and s.get("px") is None:
-                s["px"], s["pxm"], s["pxs"] = prix_be["px"], prix_be["label"], "max"
-    except Exception as e:  # noqa: BLE001
-        err_prix.append(f"Belgique : {e}")
-
-if manquants:
-    st.warning("OpenStreetMap n’a pas répondu pour : " + ", ".join(PAYS[c] for c in manquants)
-               + ". Les autres pays sont chargés.")
-    r1, r2 = st.columns([1, 3])
-    with r1:
-        if st.button("Réessayer ces pays", use_container_width=True):
-            st.rerun()  # les pays déjà chargés sont en cache, seuls les manquants sont redemandés
-    with r2:
-        with st.expander("Détail de l’erreur"):
-            for c in manquants:
-                st.caption(f"{PAYS[c]} : {raisons.get(c, '')}")
-if not stations:
-    st.error("Aucune station chargée.")
-    st.stop()
-
-df = pd.DataFrame(stations)
-osm = ""
-if dates:
-    try:
-        osm = datetime.strptime(min(dates)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
-    except ValueError:
-        osm = ""
+with st.expander("Remplacer la liste"):
+    st.caption("Fichier Excel ou CSV, une ligne par station. Colonnes reconnues : LIBELLE (ou NOM), ADRESSE, "
+               "CODE_POSTAL, VILLE, LATITUDE, LONGITUDE, et si possible MARQUE, NOM_GROUPE, CODE, PAYS. Sans "
+               "coordonnées, les stations sont placées d’après le code postal et la localité.")
+    up = st.file_uploader("Nouvelle liste", type=["xlsx", "xls", "csv"], key="pompes_fav_upload",
+                          label_visibility="collapsed")
+    if up is not None:
+        try:
+            essai, rem_essai = lire_favorites(up.getvalue(), up.name)
+        except Exception as e:  # noqa: BLE001
+            essai, rem_essai = [], []
+            st.error(f"Fichier non reconnu : {e}")
+        if essai:
+            st.caption(f"{len(essai)} station(s) lue(s) dans {up.name}. " + " ".join(rem_essai))
+            if st.button("Utiliser cette liste", type="primary"):
+                FAV_LOCAL.parent.mkdir(parents=True, exist_ok=True)
+                FAV_LOCAL.write_bytes(up.getvalue())
+                favorites_depuis.clear()
+                st.rerun()
+    st.caption("La liste importée ici reste en place jusqu’au prochain redémarrage du serveur. Pour la garder "
+               "définitivement, elle doit remplacer assets/pompes_favorites.xlsx dans le dépôt.")
+    if FAV_LOCAL.exists() and FAV_ASSET.exists():
+        if st.button("Revenir à la liste du dépôt"):
+            FAV_LOCAL.unlink()
+            favorites_depuis.clear()
+            st.rerun()
 
 ui.section("Carte")
-lib = {"total": "TotalEnergies", "as24": "AS24", "circlek": "Circle K"}
-cols = st.columns(len(res_sel) + 1)
-for col, r in zip(cols, res_sel):
-    col.metric(lib[r], f"{int((df['r'] == r).sum()):,}".replace(",", " "))
-cols[-1].metric("Accès PL confirmé", f"{int((df['pl'] == 1).sum()):,}".replace(",", " "))
-if off_ok:
-    n_hors = int((df["src"] == "osm_hors").sum())
-    st.caption(f"{n_off} station(s) de la liste officielle Circle K ({', '.join(PAYS[c] for c in sorted(pays_ck))}), "
-               f"dont {n_fus} rapprochée(s) d’une fiche OpenStreetMap. {n_hors} station(s) OpenStreetMap de ces pays "
-               "absentes de la liste officielle restent sur la carte, signalées comme non confirmées. "
-               "En Belgique et au Luxembourg, les pompes restent sous marque TotalEnergies (boutique Circle K).")
-if n_prix_fr or prix_be:
-    st.caption(" ".join(x for x in [
-        f"Prix du gazole affiché pour {n_prix_fr} station(s) en France (flux officiel, mis à jour toutes les 10 min)."
-        if n_prix_fr else "",
-        f"Belgique : prix maximum officiel du gasoil routier, {str(round(prix_be['px'], 3)).replace('.', ',')} €/L "
-        f"({prix_be['label']})." if prix_be else "",
-    ] if x))
-if err_prix:
-    st.caption("Prix indisponibles pour le moment : " + " ; ".join(err_prix))
-
-recap = (df.assign(Pays=df["p"].map(PAYS), Réseau=df["r"].map(lib))
-           .pivot_table(index="Pays", columns="Réseau", values="la", aggfunc="count", fill_value=0))
-recap["Total"] = recap.sum(axis=1)
-with st.expander("Détail par pays"):
-    st.dataframe(recap.sort_values("Total", ascending=False), use_container_width=True)
+st.caption("La carte s’ouvre avec mes stations. Dans le panneau « Autres stations », activer TotalEnergies, AS24 ou "
+           "Circle K lance la recherche sur OpenStreetMap : dans le rayon autour du point choisi, ou dans tout le pays.")
 
 try:
     frontieres = load_borders()
 except Exception:  # noqa: BLE001
     frontieres = None
 
-app_html = build_app_html(stations, osm, manquants, frontieres, n_off,
-                          datetime.now().strftime("%d/%m/%Y à %H:%M") if (n_prix_fr or prix_be) else "")
-bouton_ouvrir(app_html)
+extra: dict = {}
+zone_bouton, zone_etat = st.empty(), st.empty()
+
+
+def afficher_bouton() -> str:
+    html_ = build_app_html(favorites, frontieres, extra, nom_liste)
+    with zone_bouton.container():
+        bouton_ouvrir(html_)
+    return html_
+
+
+app_html = afficher_bouton()          # mes stations tout de suite, le reste arrive ensuite
+notes = []
+
+# Prix : France station par station (flux officiel), Belgique prix maximum officiel
+zone_etat.caption("Chargement des prix du gazole…")
+try:
+    pts = prix_france()
+    n_px = lier_prix_france(favorites, pts)
+    extra["prix_fr"] = [[round(p["la"], 5), round(p["lo"], 5), p["id"], p["px"], p["maj"], 1 if p["pl"] else 0]
+                        for p in pts if p["px"] is not None or p["pl"]]
+    extra["prix_le"] = datetime.now().strftime("%d/%m/%Y à %H:%M")
+    if any(f["p"] == "FR" for f in favorites):
+        notes.append(f"Prix du gazole affiché pour {n_px} de mes stations (flux officiel français, mis à jour toutes "
+                     "les 10 min).")
+except Exception as e:  # noqa: BLE001
+    notes.append(f"Prix France indisponibles pour le moment ({str(e)[:120]}).")
+try:
+    extra["prix_be"] = prix_max_belgique()
+except Exception:  # noqa: BLE001
+    pass
+app_html = afficher_bouton()
+
+# Liste officielle Circle K (BE, LU, NL, DE) : utilisée quand on cherche les autres stations dans ces pays
+zone_etat.caption("Chargement de la liste officielle Circle K…")
+try:
+    officiel = circlek_officiel()
+    try:
+        serv = circlek_lu_services()
+        for o in officiel:
+            sv = serv.get(norm(o["n"]))
+            if o["p"] == "LU" and sv:
+                o["pl"] = sv["pl"] if sv["pl"] is not None else o["pl"]
+                o["ad"] = sv["ad"] if sv["ad"] is not None else o["ad"]
+                o["w"] = sv["w"]
+    except Exception:  # noqa: BLE001
+        notes.append("Fiches circlek.lu indisponibles : pas de détail Pompe PL / AdBlue pour le Luxembourg.")
+    for o in officiel:
+        o["code"] = o.get("code") or f"{o['la']},{o['lo']}"
+    extra["ck"] = officiel
+    app_html = afficher_bouton()
+except Exception:  # noqa: BLE001
+    notes.append("La liste officielle Circle K n’a pas répondu : en Belgique, au Luxembourg, aux Pays-Bas et en "
+                 "Allemagne, la recherche utilisera OpenStreetMap seul.")
+zone_etat.caption(" ".join(notes))
 if frontieres is None:
     st.caption("Tracé des frontières indisponible pour le moment : la carte s’ouvre sans.")
 
-xls = df.assign(
-    Réseau=df["r"].map(lib), Pays=df["p"].map(PAYS),
-    **{"Accès PL": df["pl"].map({1: "Confirmé", 0: "Interdit"}).fillna("Non renseigné"),
-       "AdBlue": df["ad"].map({1: "Oui", 0: "Non"}).fillna(""),
-       "GNL": df["lng"].map({1: "Oui", 0: "Non"}).fillna(""),
-       "GNC": df["cng"].map({1: "Oui", 0: "Non"}).fillna(""),
-       "Gazole €/L": df["px"] if "px" in df else None,
-       "Prix": (df["pxs"].map({"station": "Affiché à la station", "max": "Maximum officiel"}) if "pxs" in df else None),
-       "Prix mis à jour": df["pxm"] if "pxm" in df else None,
-       "Source": df["src"].map({"officiel": "Liste officielle Circle K", "osm": "OpenStreetMap",
-                                "osm_hors": "OpenStreetMap, absente de la liste officielle"}),
-       "OSM": df["id"].map(lambda v: f"https://www.openstreetmap.org/{v}" if v else "")},
-).rename(columns={"e": "Enseigne", "n": "Station", "a": "Adresse", "cp": "CP", "v": "Localité",
-                  "la": "Latitude", "lo": "Longitude", "h": "Horaires", "t": "Téléphone", "w": "Site"})
-xls = xls[["Réseau", "Enseigne", "Station", "Adresse", "CP", "Localité", "Pays", "Latitude", "Longitude",
-           "Accès PL", "AdBlue", "GNL", "GNC", "Gazole €/L", "Prix", "Prix mis à jour",
-           "Horaires", "Téléphone", "Site", "Source", "OSM"]]
+if favorites:
+    dff = pd.DataFrame(favorites)
+    for c in ("px", "pxs", "pxm"):
+        if c not in dff:
+            dff[c] = None
+    xls = dff.assign(
+        Pays=dff["p"].map(PAYS),
+        **{"Accès PL": dff["pl"].map({1: "Confirmé", 0: "Interdit"}).fillna("Non renseigné"),
+           "Gazole €/L": dff["px"],
+           "Prix mis à jour": dff["pxm"]},
+    ).rename(columns={"code": "Code", "e": "Enseigne", "n": "Station", "a": "Adresse", "cp": "CP", "v": "Localité",
+                      "la": "Latitude", "lo": "Longitude", "grp": "Réseau"})
+    xls = xls[["Code", "Station", "Enseigne", "Réseau", "Adresse", "CP", "Localité", "Pays", "Latitude", "Longitude",
+               "Accès PL", "Gazole €/L", "Prix mis à jour"]]
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("Télécharger la carte (HTML)", app_html.encode("utf-8"),
+                           file_name="carte_pompes_carburant.html", mime="text/html", use_container_width=True)
+    with d2:
+        st.download_button("Télécharger mes stations avec les prix (Excel)", excel_base(xls),
+                           file_name="mes_stations_carburant.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
 
-d1, d2, d3 = st.columns(3)
-with d1:
-    st.download_button("Télécharger la carte (HTML)", app_html.encode("utf-8"), file_name="carte_pompes_carburant.html",
-                       mime="text/html", use_container_width=True)
-with d2:
-    st.download_button("Télécharger la base (Excel)", excel_base(xls), file_name="pompes_totalenergies_circlek.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       use_container_width=True)
-with d3:
-    if st.button("Actualiser depuis OpenStreetMap", use_container_width=True):
-        stations_pays.clear()
-        st.rerun()
-
-st.caption(f"Sources : liste officielle Circle K pour BE, LU, NL et DE quand elle répond, OpenStreetMap ailleurs"
-           f"{f' (données du {osm})' if osm else ''}. Les réseaux officiels évoluent plus vite que la "
-           "carte communautaire : une station récemment rebaptisée peut manquer ou apparaître sous l’ancienne marque. "
-           "L’accès poids lourds, l’AdBlue et les horaires ne sont renseignés que pour une partie des stations.")
+st.caption("Sources : ma liste Excel ; pour les autres stations, OpenStreetMap (cherché depuis la carte) et la liste "
+           "officielle Circle K pour BE, LU, NL et DE. L’accès poids lourds, l’AdBlue et les horaires ne sont "
+           "renseignés que pour une partie des stations OpenStreetMap.")
