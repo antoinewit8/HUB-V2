@@ -65,7 +65,7 @@ TOOLS = [
     dict(key="tractionnaires", file="outils/tractionnaires_km.py", title="Tractionnaires KM", icon="people",
          cat="renta", desc="Km estimés PTV, CA et rentabilité par tractionnaire et par véhicule."),
     dict(key="renta_departements", file="outils/renta_departements.py", title="Rentabilité par département",
-         icon="pie", cat="renta", desc="Lot sec ou groupage, km en route chaînée et km à vide par département."),
+         icon="pie", cat="renta", desc="Renta et km à vide par département de livraison : vide de sortie, vide d’entrée, rechargement local."),
     dict(key="renta_benne", file="outils/renta_benne.py", title="Rentabilité benne", icon="truck", cat="renta",
          desc="Rotations benne : CA, km chargés, km à vide et rentabilité au kilomètre."),
     dict(key="renta_plateau", file="outils/renta_plateau.py", title="Rentabilité plateau", icon="truck",
