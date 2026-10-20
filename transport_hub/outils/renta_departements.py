@@ -20,12 +20,14 @@ import sys
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import ui  # noqa: E402
+from tools.renta_dept import carte as K  # noqa: E402
 from tools.renta_dept import engine as E  # noqa: E402
 from tools.renta_dept.plateau import moteur  # noqa: E402
 
@@ -329,11 +331,11 @@ st.caption(f"Source : {calcul['source']} · {d0:%d/%m/%Y} → {d1:%d/%m/%Y} · v
 #  RÉSULTATS
 # ══════════════════════════════════════════════════════════════════
 
-ui.section("France")
 def _n(v, fmt, suffixe=""):
     return (format(v, fmt).replace(",", "\u202f") + suffixe) if pd.notna(v) else "—"
 
 
+ui.section("France")
 tuiles = [
     (_n(tot["livraisons"], ",.0f"), "Livraisons", f"{int(tot['sorties'])} repositionnements complets"),
     (_n(tot["ca"], ",.0f", " €"), "CA", ""),
@@ -345,6 +347,9 @@ tuiles = [
 st.markdown('<div class="rd-kpis">' + "".join(
     f'<div class="rd-kpi"><div class="v">{v}</div><div class="l">{l}</div><div class="s">{s_}</div></div>'
     for v, l, s_ in tuiles) + "</div>", unsafe_allow_html=True)
+
+titre_carte = f"{d0:%d/%m/%Y} → {d1:%d/%m/%Y}"
+components.html(K.carte_html(zones, tot, seuil_local, min_liv, conv_lbl), height=680, scrolling=True)
 
 fr = zones[zones["france"]].copy()
 hors = zones[~zones["france"]].copy()
@@ -426,12 +431,16 @@ meta = {
     "Affrétés": "inclus" if incl_aff else "comptés à part", "Calculé le": calcul["genere"],
 }
 st.write("")
-b1, b2 = st.columns([1, 3])
+b1, b2, b3 = st.columns([1, 1, 2])
 with b1:
     st.download_button("Rapport Excel", data=export_excel(zones, rep, ctrl, meta),
                        file_name="Renta_Departements.xlsx", type="primary", width="stretch",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 with b2:
+    st.download_button("Carte (HTML)", width="stretch", mime="text/html", file_name="Carte_Renta_Departements.html",
+                       data=K.carte_html(zones, tot, seuil_local, min_liv, conv_lbl, titre=titre_carte,
+                                         autonome=True).encode("utf-8"))
+with b3:
     if calcul["source"] == "Fichiers" and st.button("Nouveau calcul"):
         st.session_state.pop("rd_calc", None)
         st.rerun()
