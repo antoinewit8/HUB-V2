@@ -1206,6 +1206,9 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);-we
 .rank:hover{background:#f7f7f9}
 .rank.h{cursor:default;border-top:0;font-size:11.5px;color:var(--sub);font-weight:500;padding-top:0}
 .rank.h:hover{background:none}
+.rank.h .sh{cursor:pointer;user-select:none}.rank.h .sh:hover{color:var(--text)}.rank.h .sh.on{color:var(--text);font-weight:600}
+.sortdir{font:13px var(--font);border:0;background:var(--soft);color:var(--blue);border-radius:10px;padding:7px 12px;cursor:pointer;white-space:nowrap}
+.sortdir:hover{background:#dedee3}
 .rank .n{color:var(--sub);font-variant-numeric:tabular-nums;text-align:right}
 .rank .tr b{display:block;font-weight:600}.rank .tr span{font-size:12px;color:var(--sub)}
 .renta{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
@@ -1267,8 +1270,9 @@ tr:hover td{background:#fafafc}
  <div class="card">
   <div class="row-head"><div><h2>Classement des camions</h2>
    <p class="hint" style="margin:0">Renta comparée à la moyenne de la flotte · cliquez sur un camion pour voir sa tournée.</p></div>
-   <div class="seg" id="sort"><button data-s="renta" class="on">Renta</button><button data-s="ca">CA</button>
-   <button data-s="km_total">KM</button><button data-s="pct_vide">% vide</button></div></div>
+   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div class="seg" id="sort"><button data-s="renta" class="on">Renta</button><button data-s="ca">CA</button>
+   <button data-s="km_total">KM</button><button data-s="pct_vide">% vide</button><button data-s="jours">Jours</button><button data-s="tracteur">Camion A–Z</button></div>
+   <button class="sortdir" id="sortdir" title="Inverser l'ordre"></button></div></div>
   <div class="legend" style="margin-bottom:6px"><span><i style="background:var(--c-ch)"></i>Chargé</span>
    <span><i style="background:var(--c-grp)"></i>Groupage</span><span><i style="background:var(--c-vide)"></i>À vide</span></div>
   <div id="rank"></div>
@@ -1323,11 +1327,19 @@ document.getElementById('kpis').innerHTML = kpiHTML([
  ['Dossiers', nf0.format(ndos), sansCA?`<span style="color:var(--orange)">${sansCA} sans CA</span>`:'tous avec CA']]);
 
 // ── Classement
-let sortKey='renta';
+// Tri : boutons ou en-têtes de colonnes ; re-cliquer le tri actif (ou le bouton d'ordre) inverse l'ordre.
+let sortKey='renta', sortDir=-1;
+const DEF_DIR = {tracteur:1, pct_vide:1};          // A→Z, % vide du plus petit au plus grand ; le reste du plus grand
+function setSort(k){ if(k===sortKey) sortDir=-sortDir; else { sortKey=k; sortDir=DEF_DIR[k]||-1; } drawRank(); }
 function drawRank(){
- const asc = sortKey==='pct_vide', arr=[...F].sort((a,b)=>((asc?1:-1)*((a[sortKey]??-1e9)-(b[sortKey]??-1e9))));
+ const arr=[...F].sort((a,b)=>{ const x=a[sortKey], y=b[sortKey];
+  if(x==null||x==='') return (y==null||y==='')?0:1; if(y==null||y==='') return -1;      // vides toujours en bas
+  return sortDir*(sortKey==='tracteur' ? String(x).localeCompare(String(y),'fr',{numeric:true,sensitivity:'base'}) : x-y); });
+ document.querySelectorAll('#sort button').forEach(b=>b.classList.toggle('on', b.dataset.s===sortKey));
+ document.getElementById('sortdir').textContent = sortKey==='tracteur' ? (sortDir>0?'↓ A → Z':'↑ Z → A') : (sortDir<0?'↓ Du plus grand':'↑ Du plus petit');
+ const ar = k => k===sortKey ? (sortDir>0?' ↑':' ↓') : '', sh = (k,l,c='') => `<div class="sh ${c} ${k===sortKey?'on':''}" data-s="${k}">${l}${ar(k)}</div>`;
  const maxKm = Math.max(...F.map(f=>f.km_total||0),1);
- let h = `<div class="rank h"><div></div><div>Camion</div><div class="num">Renta €/km</div><div>Kilomètres</div><div class="num">CA</div><div class="num">Jours</div><div></div></div>`;
+ let h = `<div class="rank h"><div></div>${sh('tracteur','Camion')}${sh('renta','Renta €/km','num')}${sh('km_total','Kilomètres')}${sh('ca','CA','num')}${sh('jours','Jours','num')}<div></div></div>`;
  arr.forEach((f,i)=>{
   const ch=(f.km_charge||0)-(f.km_groupage||0), g=f.km_groupage||0, v=f.km_vide||0, w=x=>(x/maxKm*100).toFixed(2)+'%';
   const cls = cmp(f.renta);
@@ -1344,8 +1356,10 @@ function drawRank(){
  });
  const el=document.getElementById('rank'); el.innerHTML=h;
  el.querySelectorAll('.rank[data-tr]').forEach(r=>r.onclick=()=>{ showTab('cam'); selTruck(r.dataset.tr); });
+ el.querySelectorAll('.rank.h .sh').forEach(c=>c.onclick=()=>setSort(c.dataset.s));
 }
-document.querySelectorAll('#sort button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#sort button').forEach(x=>x.classList.remove('on'));b.classList.add('on');sortKey=b.dataset.s;drawRank();});
+document.querySelectorAll('#sort button').forEach(b=>b.onclick=()=>setSort(b.dataset.s));
+document.getElementById('sortdir').onclick=()=>{ sortDir=-sortDir; drawRank(); };
 drawRank();
 
 // ── Clients
