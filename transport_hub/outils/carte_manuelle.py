@@ -9,7 +9,7 @@ se définissent toujours directement dans map.html.
 
 import json
 import os
-import time
+import threading
 from pathlib import Path
 
 import requests
@@ -19,24 +19,24 @@ from dotenv import load_dotenv
 from jinja2 import Template
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
-MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://hub-m36x.onrender.com").rstrip("/")
+MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.com").rstrip("/")
 
 from core import ui
 
 ui.page_config(ui.TOOLS_BY_KEY["carte_manuelle"]["title"])
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def warm_up_server(url: str) -> bool:
-    """Render s'endort sur le plan gratuit : on le réveille une fois par session."""
-    for _ in range(3):
+def reveiller_serveur(url: str):
+    """Render endort le serveur carte sur le plan gratuit. On le réveille en
+    tâche de fond : la page s'affiche tout de suite au lieu d'attendre jusqu'à
+    une minute derrière un sablier. La carte relance aussi ce réveil à
+    l'ouverture et le garde éveillé tant qu'elle est ouverte."""
+    def _ping():
         try:
-            if requests.get(f"{url}/health", timeout=12).status_code == 200:
-                return True
+            requests.get(f"{url}/health", timeout=60)
         except requests.RequestException:
             pass
-        time.sleep(4)
-    return False
+    threading.Thread(target=_ping, daemon=True).start()
 
 
 def bouton_ouvrir(page_html: str):
@@ -81,8 +81,7 @@ def _limites_admin() -> str:
 # ─── Page ────────────────────────────────────────────────────────────────────
 ui.page("carte_manuelle", "Itinéraires poids lourds, péages et kilomètres par pays, traversées. La carte s’ouvre en plein écran dans un nouvel onglet.")
 
-with st.spinner("Réveil du serveur carte…"):
-    server_ready = warm_up_server(MAP_SERVER_URL)
+reveiller_serveur(MAP_SERVER_URL)
 
 try:
     map_html_path = Path(__file__).parent.parent / "map.html"
@@ -103,11 +102,6 @@ except Exception as e:
 
 bouton_ouvrir(html_final)
 
-if server_ready:
-    st.markdown('<div class="ap-statut"><i></i>Serveur carte prêt</div>', unsafe_allow_html=True)
-else:
-    st.markdown(f'<div class="ap-statut off"><i></i>Le serveur carte ({MAP_SERVER_URL}) n’a pas répondu au réveil. '
-                'Le premier calcul peut échouer : relancez-le une fois.</div>', unsafe_allow_html=True)
 
 st.write("")
 c1, _ = st.columns([1, 2])

@@ -8,6 +8,7 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <link rel="preconnect" href="{{ server_url }}" crossorigin>
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
 
@@ -766,7 +767,21 @@
         let routeKnown = false;           // le serveur connaît routeId
         let isModified = false;
         let busy = false;
-        let pendingCalc = false;          // un calcul demandé pendant qu'un autre tournait
+
+        // Calcul « dernier demandé gagne » : un nouveau calcul annule celui en
+        // cours au lieu d'attendre qu'il finisse.
+        let calcSeq = 0, calcCtrl = null;
+
+        // Tracés déjà calculés (mêmes points, mêmes options) : réaffichés sans
+        // appel au serveur (annuler un déplacement, décocher puis recocher…).
+        const ROUTE_CACHE = new Map();
+        const ROUTE_CACHE_MAX = 40;
+
+        // Recalcul en direct pendant qu'on glisse un repère, comme Google Maps.
+        // Un seul appel à la fois, au plus un toutes les LIVE_DRAG_MIN_MS.
+        // Chaque appel est une transaction PTV : false = recalcul au lâcher seulement.
+        const LIVE_DRAG = true;
+        const LIVE_DRAG_MIN_MS = 250;
 
         // Changer le départ/l'arrivée par la saisie ou inverser les deux crée un
         // nouveau trajet : le prochain tracé devient la référence, au lieu d'être
@@ -790,7 +805,14 @@
         // Requête sur la racine en no-cors : aucun appel PTV, aucun coût.
         (function wakeServer() {
             if (!/^https?:\/\//.test(serverUrl)) return;   // URL non injectée : rien à réveiller
-            fetch(serverUrl + '/', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+            const ping = () => fetch(serverUrl + '/health', { cache: 'no-store' }).catch(() => {});
+            ping();
+            // Render endort le service après 15 min sans requête : tant que la
+            // carte est ouverte et visible, on le garde éveillé (pas d'appel PTV).
+            setInterval(() => { if (document.visibilityState === 'visible') ping(); }, 8 * 60 * 1000);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') ping();
+            });
         })();
 
         // ═══════════════════════════════════════════════════════
@@ -819,6 +841,16 @@
                 id: 'routeLayer', type: 'line', source: 'routeSource',
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: { 'line-color': '#007cbf', 'line-width': 6, 'line-opacity': 0.85 }
+            });
+
+            // Aperçu pendant le glisser d'un repère : lignes droites vers les
+            // points voisins, affichées tout de suite, avant la réponse PTV.
+            map.addSource('previewSource', { type: 'geojson', data: emptyGeoJSON() });
+            map.addLayer({
+                id: 'previewLayer', type: 'line', source: 'previewSource',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#007cbf', 'line-width': 3, 'line-opacity': 0.75,
+                         'line-dasharray': [1.2, 1.6] }
             });
 
             // Variantes PTV, sous le tracé principal
@@ -935,7 +967,10 @@
                 el.addEventListener('mouseleave', () => el.firstElementChild.classList.remove('hl'));
                 marker = new maplibregl.Marker({ element: el, anchor: 'bottom', draggable: true })
                     .setLngLat([pt.lng, pt.lat]).addTo(map);
+                marker.on('dragstart', () => onPinDragStart(marker));
+                marker.on('drag', () => onPinDrag(marker));
                 marker.on('dragend', () => {
+                    onPinDragEnd();
                     const ll = marker.getLngLat();
                     const target = role === 'origin' ? origin : dest;
                     if (!target) return;
@@ -1347,11 +1382,11 @@
 
         // 1) Endpoint historique du glisser-déposer : il travaille nativement en
         //    coordonnées, donc pas de géocodage à traverser.
-        async function _viaDrag(pts) {
+        async function _viaDrag(pts, signal) {
             const body = Object.assign({ route_id: routeId, waypoints: pts }, options());
             const r = await fetch(`${serverUrl}/api/recalculate_drag`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
+                body: JSON.stringify(body), signal
             });
             if (!r.ok) throw new Error(`recalculate_drag ${r.status} — ${(await r.text()).slice(0, 110)}`);
             const d = await r.json();
@@ -1361,7 +1396,7 @@
 
         // 2) /api/recalculate en coordonnées. Ne marche que si le serveur sait
         //    reconnaître un couple "lat,lon" avant de géocoder.
-        async function _viaRecalculate(pts) {
+        async function _viaRecalculate(pts, signal) {
             const via = pts.slice(1, -1);
             const body = Object.assign({
                 origin: fmtLL2(pts[0]),
@@ -1374,7 +1409,7 @@
 
             const r = await fetch(`${serverUrl}/api/recalculate`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
+                body: JSON.stringify(body), signal
             });
             if (!r.ok) throw new Error(`recalculate ${r.status} — ${(await r.text()).slice(0, 110)}`);
             const d = await r.json();
@@ -1385,7 +1420,7 @@
         // 3) /api/recalculate avec les libellés d'adresse, quand les points
         //    viennent de la recherche. Dernier recours si le serveur refuse les
         //    coordonnées.
-        async function _viaLabels(pts) {
+        async function _viaLabels(pts, signal) {
             const looksLikeCoords = t => /^\s*-?\d+\.?\d*\s*,\s*-?\d+\.?\d*\s*$/.test(t || '');
             if (!origin.label || !dest.label
                 || looksLikeCoords(origin.label) || looksLikeCoords(dest.label)) {
@@ -1394,7 +1429,7 @@
             const body = Object.assign({ origin: origin.label, dest: dest.label }, options());
             const r = await fetch(`${serverUrl}/api/recalculate`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
+                body: JSON.stringify(body), signal
             });
             if (!r.ok) throw new Error(`recalculate/libellés ${r.status}`);
             const d = await r.json();
@@ -1402,18 +1437,41 @@
             return _checkRoute(d, pts);
         }
 
-        async function requestRoute() {
-            const pts = allPoints();
-            const attempts = [
-                ['recalculate_drag', _viaDrag],
-                ['recalculate',      _viaRecalculate],
-                ['libellés',         _viaLabels]
-            ];
+        function _routeKey(pts) {
+            const o = options();
+            return JSON.stringify([pts.map(p => [+p.lat.toFixed(6), +p.lng.toFixed(6)]),
+                o.avoid_tolls, o.avoid_highways, o.traffic, o.alternatives, o.co2, o.ferries]);
+        }
+        function _cacheRoute(key, data) {
+            ROUTE_CACHE.delete(key);
+            ROUTE_CACHE.set(key, data);
+            while (ROUTE_CACHE.size > ROUTE_CACHE_MAX) ROUTE_CACHE.delete(ROUTE_CACHE.keys().next().value);
+        }
+
+        // fast = pendant un glisser : coordonnées uniquement, pas de replis.
+        async function requestRoute(pts, signal, fast) {
+            pts = pts || allPoints();
+            // Trafic réel : pas de cache navigateur (le serveur garde 2 min).
+            const useCache = !options().traffic;
+            const key = _routeKey(pts);
+            if (useCache && ROUTE_CACHE.has(key)) {
+                const hit = ROUTE_CACHE.get(key);
+                _cacheRoute(key, hit);
+                return hit;
+            }
+            const attempts = fast
+                ? [['recalculate_drag', _viaDrag]]
+                : [['recalculate_drag', _viaDrag],
+                   ['recalculate',      _viaRecalculate],
+                   ['libellés',         _viaLabels]];
             const errors = [];
             for (const [name, fn] of attempts) {
                 try {
-                    return await fn(pts);
+                    const data = await fn(pts, signal);
+                    if (useCache) _cacheRoute(key, data);
+                    return data;
                 } catch (e) {
+                    if (e.name === 'AbortError') throw e;
                     errors.push(`${name} → ${e.message}`);
                     console.warn('Tentative', name, e);
                 }
@@ -1425,37 +1483,123 @@
         function autoCalculate() {
             if (!origin || !dest) return;
             clearTimeout(calcTimer);
-            calcTimer = setTimeout(calculateRoute, 200);
+            calcTimer = setTimeout(calculateRoute, 30);
         }
 
         async function calculateRoute() {
             if (!origin || !dest) return;
-            // Un calcul tourne déjà : on le laisse finir puis on relance avec
-            // les points à jour, au lieu d'ignorer la demande.
-            if (busy) { pendingCalc = true; return; }
+            clearTimeout(calcTimer);
+            _stopLive();
+            // Un calcul tourne déjà : on l'annule, seul le dernier compte.
+            const seq = ++calcSeq;
+            if (calcCtrl) calcCtrl.abort();
+            const ctrl = calcCtrl = new AbortController();
 
             busy = true;
-            pendingCalc = false;
             const asReference = !hasRoute || forceReference;
             // Nouveau trajet : les traversées imposées sur l'ancien n'ont plus de sens.
             if (forceReference) forcedFerries = [];
-            setLoading(true);
-            refreshPanel();
+            const pts = allPoints();
+            // Réponse déjà en cache : pas d'état « chargement », affichage direct.
+            const instant = !options().traffic && ROUTE_CACHE.has(_routeKey(pts));
+            if (!instant) { setLoading(true); refreshPanel(); }
             try {
-                const data = await requestRoute();
+                const data = await requestRoute(pts, ctrl.signal);
+                if (seq !== calcSeq) return;
                 applyRoute(data, asReference);
                 if (asReference) forceReference = false;
             } catch (err) {
+                if (seq !== calcSeq || err.name === 'AbortError') return;
                 console.error('Calcul:', err);
                 toast('Calcul impossible — ' + err.message);
                 // Le tracé affiché reste l'ancien : on remet les traversées qui vont avec.
                 forcedFerries = lastGoodFerries.slice();
                 if (hasRoute) renderFerries();
             } finally {
-                busy = false;
-                setLoading(false);
-                refreshPanel();
-                if (pendingCalc) { pendingCalc = false; autoCalculate(); }
+                if (seq === calcSeq) {
+                    busy = false;
+                    calcCtrl = null;
+                    _setPreview(null);
+                    setLoading(false);
+                    refreshPanel();
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  GLISSER UN REPÈRE : APERÇU + RECALCUL EN DIRECT
+        // ═══════════════════════════════════════════════════════
+
+        let dragMarker = null;
+        let liveBusy = false, liveLastT = 0, liveTimer = null, liveCtrl = null, liveSeq = 0;
+
+        function _livePoints() {
+            const ll = m => { const p = m.getLngLat(); return { lat: p.lat, lng: p.lng }; };
+            return [
+                originMarker ? ll(originMarker) : { lat: origin.lat, lng: origin.lng },
+                ...waypoints.map(w => ll(w.marker)),
+                destMarker ? ll(destMarker) : { lat: dest.lat, lng: dest.lng }
+            ];
+        }
+        function _markerIndex(marker) {
+            if (marker === originMarker) return 0;
+            if (marker === destMarker) return waypoints.length + 1;
+            const i = waypoints.findIndex(w => w.marker === marker);
+            return i < 0 ? -1 : i + 1;
+        }
+        function _setPreview(coords) {
+            const src = map.getSource && map.getSource('previewSource');
+            if (src) src.setData(coords && coords.length > 1 ? buildGeoJSON(coords) : emptyGeoJSON());
+        }
+
+        function onPinDragStart(marker) {
+            dragMarker = marker;
+            liveLastT = 0;
+        }
+        function onPinDrag(marker) {
+            if (!origin || !dest) return;
+            const pts = _livePoints();
+            const i = _markerIndex(marker);
+            if (i < 0) return;
+            _setPreview(pts.slice(Math.max(0, i - 1), i + 2).map(p => [p.lng, p.lat]));
+            _liveTick();
+        }
+        function onPinDragEnd() {
+            dragMarker = null;
+            _stopLive();
+        }
+        function _stopLive() {
+            clearTimeout(liveTimer); liveTimer = null;
+            liveSeq++;
+            if (liveCtrl) { liveCtrl.abort(); liveCtrl = null; }
+            liveBusy = false;
+        }
+
+        async function _liveTick() {
+            if (!LIVE_DRAG || !dragMarker || !hasRoute || forceReference || busy) return;
+            if (liveBusy || liveTimer) return;
+            const wait = LIVE_DRAG_MIN_MS - (performance.now() - liveLastT);
+            if (wait > 0) {
+                liveTimer = setTimeout(() => { liveTimer = null; _liveTick(); }, wait);
+                return;
+            }
+            liveBusy = true;
+            liveLastT = performance.now();
+            const seq = ++liveSeq;
+            const ctrl = liveCtrl = new AbortController();
+            const pts = _livePoints();
+            try {
+                const data = await requestRoute(pts, ctrl.signal, true);
+                if (seq !== liveSeq || !dragMarker) return;
+                _checkRoute(data, pts);
+                applyRoute(data, false);
+            } catch (e) {
+                /* aperçu seulement : le calcul au lâcher affichera l'erreur */
+            } finally {
+                if (seq === liveSeq) {
+                    liveBusy = false; liveCtrl = null;
+                    if (dragMarker) _liveTick();   // le repère a encore bougé
+                }
             }
         }
 
@@ -2214,7 +2358,10 @@
             const wp = { id, marker, color, rank: null, label: label || coordLabel(lngLat) };
             waypoints.push(wp);
 
+            marker.on('dragstart', () => onPinDragStart(marker));
+            marker.on('drag', () => onPinDrag(marker));
             marker.on('dragend', () => {
+                onPinDragEnd();
                 wp.label = coordLabel(marker.getLngLat());
                 updateWaypointsList();
                 autoCalculate();
