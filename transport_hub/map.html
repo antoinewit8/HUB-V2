@@ -261,6 +261,17 @@
         .opts .rows { margin-top: 0; border-top: .5px solid var(--hair); }
         .opts .row { font-size: 14px; padding: 8px 0; }
         #traffic-pop { margin-top: 8px; }
+        /* Pompes Total de ma liste le long du trajet */
+        #pompes-box { display: none; margin-top: 10px; padding: 13px 14px 10px; background: #fff; border-radius: 14px; box-shadow: var(--tile); }
+        #pompes-box.show { display: block; }
+        #pompes-box .al-row { max-width: none; }
+        .pompe-seg { margin: 0 0 8px; }
+        .pompe-seg button { flex: 1; padding: 5px 8px; font-size: 12px; }
+        .al-ico.pompe { background: #2f6bff; box-shadow: 0 0 0 2px #ffcc00; font-variant-numeric: tabular-nums; }
+        .pompe-pin { width: 22px; height: 22px; border-radius: 50%; background: #2f6bff; color: #fff; border: 2px solid #ffcc00;
+            font: 700 11px/18px var(--font); text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.4); cursor: pointer;
+            font-variant-numeric: tabular-nums; }
+        .pompe-pin:hover { transform: scale(1.12); }
         @keyframes popIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
         #co2-line { display: none; margin-top: 8px; padding: 10px 12px; background: #fff; border-radius: 14px;
             box-shadow: var(--tile); font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -606,6 +617,9 @@
                 <label class="row" title="Émissions CO2e du trajet (ISO 14083) pour un camion Euro 6">CO₂ (Euro 6)
                     <span class="sw"><input type="checkbox" id="opt-co2" onchange="onOptionChange()"><span></span></span>
                 </label>
+                <label class="row" id="row-pompes" title="Ma liste de pompes Total (page Pompes carburant) sur la carte, et celles le long du trajet">Pompes Total (ma liste)
+                    <span class="sw"><input type="checkbox" id="opt-pompes" onchange="onPompesToggle()"><span></span></span>
+                </label>
             </div>
             </details>
             <div id="traffic-pop"></div>
@@ -635,6 +649,8 @@
                 <div id="alt-box"></div>
 
                 <div id="ferry-box"></div>
+
+                <div id="pompes-box"></div>
 
                 <div id="wp-container">
                     <button class="btn btn-save" id="btn-save" onclick="openSaveModal()" disabled>Enregistrer comme référence</button>
@@ -737,6 +753,10 @@
         // Limites des départements français,
         // injectées par Streamlit depuis assets/limites_admin.geojson.
         const LIMITES_ADMIN = {{ limites_admin | default('null', true) }};
+
+        // Ma liste de pompes Total (page Pompes carburant), avec le prix du gazole
+        // quand il est connu. Vide si Streamlit ne la fournit pas.
+        const POMPES = {{ pompes | default('[]', true) }};
 
         // La carte s'ouvre vide par défaut. Si Streamlit fournit un tracé, on l'affiche.
         const hasInitialRoute = Array.isArray(initPolyline) && initPolyline.length > 1;
@@ -880,6 +900,7 @@
 
             _initRoadTypeLayer();
             _initPLLayer();
+            _initPompes();
 
             map.on('click', onMapClick);
             map.on('contextmenu', e => addWaypoint(e.lngLat));
@@ -1001,6 +1022,8 @@
         function onMapClick(e) {
             // Clic sur une variante : géré par la couche altLayer
             if (map.getLayer('altLayer') && map.queryRenderedFeatures(e.point, { layers: ['altLayer'] }).length) return;
+            // Clic sur une pompe de ma liste : sa fiche s'ouvre (couche pompesLayer)
+            if (pompes.on && map.getLayer('pompesLayer') && map.queryRenderedFeatures(e.point, { layers: ['pompesLayer'] }).length) return;
             // Le clic ne sert qu'à compléter ce qui manque, jamais à écraser un point posé.
             if (!origin)      setPoint('origin', e.lngLat);
             else if (!dest)   setPoint('dest',   e.lngLat);
@@ -1053,6 +1076,7 @@
             badge.textContent = isModified ? 'Tracé modifié' : 'Tracé calculé';
             document.getElementById('btn-reset').disabled = !isModified;
             document.getElementById('btn-save').disabled  = !hasRoute;
+            majPompes();
         }
 
         function _epRow(role, pt) {
@@ -1074,7 +1098,7 @@
 
         // Résumé des options actives sur la ligne du dossier replié
         const OPT_LABELS = [['opt-tolls', 'Sans péage'], ['opt-hw', 'Sans autoroute'], ['opt-traffic', 'Trafic'],
-                            ['opt-alt', 'Variantes'], ['opt-co2', 'CO₂']];
+                            ['opt-alt', 'Variantes'], ['opt-co2', 'CO₂'], ['opt-pompes', 'Pompes Total']];
         function updateOptsSummary() {
             const on = OPT_LABELS.filter(([id]) => document.getElementById(id).checked).map(([, l]) => l);
             const el = document.getElementById('opts-sum');
@@ -1089,6 +1113,176 @@
             });
             updateOptsSummary();
         })();
+
+        // ═══════════════════════════════════════════════════════
+        //  POMPES TOTAL (ma liste) ET STATIONS SUR LE TRAJET
+        // ═══════════════════════════════════════════════════════
+        // La liste vient de la page Pompes carburant (assets/pompes_favorites.xlsx),
+        // injectée par Streamlit avec le prix du gazole quand il est connu.
+        // Option activée : toute la liste sur la carte ; avec un tracé, les stations
+        // à moins de « couloir » km du trajet sont numérotées dans l'ordre de passage.
+        const COULOIRS = [2, 5, 10, 20];
+        const pompes = { on: false, couloir: 5, cle: null, liste: [], pins: [], popup: null };
+        try {
+            pompes.on = localStorage.getItem('cm_pompes') === '1' && POMPES.length > 0;
+            const c = +localStorage.getItem('cm_pompes_km');
+            if (COULOIRS.includes(c)) pompes.couloir = c;
+        } catch (e) {}
+
+        function _pompeGeo(trajet) {
+            const sur = new Map(trajet.map((t, k) => [t.s.i, k + 1]));
+            return { type: 'FeatureCollection', features: POMPES.map(s => ({
+                type: 'Feature', id: s.i,
+                properties: { i: s.i, on: sur.has(s.i) ? 1 : 0, route: trajet.length ? 1 : 0 },
+                geometry: { type: 'Point', coordinates: [s.lo, s.la] }
+            })) };
+        }
+
+        function _initPompes() {
+            POMPES.forEach((s, i) => { s.i = i; });
+            const row = document.getElementById('row-pompes');
+            if (!POMPES.length) { if (row) row.style.display = 'none'; return; }
+            document.getElementById('opt-pompes').checked = pompes.on;
+            map.addSource('pompesSource', { type: 'geojson', data: _pompeGeo([]) });
+            map.addLayer({
+                id: 'pompesLayer', type: 'circle', source: 'pompesSource',
+                layout: { visibility: pompes.on ? 'visible' : 'none' },
+                paint: {
+                    // sans tracé : toute la liste bien visible ; avec tracé : hors couloir en retrait
+                    'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 9, 6, 13, 8],
+                    'circle-color': '#2f6bff',
+                    'circle-stroke-color': '#ffcc00', 'circle-stroke-width': 2,
+                    'circle-opacity': ['case', ['all', ['==', ['get', 'route'], 1], ['==', ['get', 'on'], 0]], 0.35, 0.95],
+                    'circle-stroke-opacity': ['case', ['all', ['==', ['get', 'route'], 1], ['==', ['get', 'on'], 0]], 0.35, 1]
+                }
+            });
+            pompes.popup = new maplibregl.Popup({ offset: 10, closeButton: true, maxWidth: '280px' });
+            map.on('click', 'pompesLayer', e => {
+                e.preventDefault();
+                _pompePopup(POMPES[e.features[0].properties.i]);
+            });
+            map.on('mouseenter', 'pompesLayer', () => { map.getCanvas().style.cursor = 'pointer'; });
+            map.on('mouseleave', 'pompesLayer', () => { map.getCanvas().style.cursor = ''; });
+            updateOptsSummary();
+            majPompes(true);
+        }
+
+        function _eur(v) { return v == null ? '' : v.toLocaleString('fr-FR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' €/L'; }
+        function _km1(v) { return v.toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+
+        function _pompePopup(s) {
+            const t = pompes.liste.find(x => x.s === s);
+            const lignes = [`<div class="popup-label">★ ${esc(s.n)}</div>`,
+                `<div style="color:#2f6bff;font-weight:600">${esc(s.e)}${s.code ? ` <span style="color:var(--sub);font-weight:400">· ${esc(s.code)}</span>` : ''}</div>`];
+            if (s.a) lignes.push(`<div>${esc(s.a)}</div>`);
+            lignes.push(`<div>${esc([s.cp, s.v].filter(Boolean).join(' '))}</div>`);
+            if (s.pl === 1) lignes.push(`<div style="color:#1a7f37">Accès PL${s.pln ? ` (réseau ${esc(s.pln)})` : ''}</div>`);
+            if (s.px != null) lignes.push(`<div>Gazole : <b>${_eur(s.px)}</b>${s.pxm ? ` <span style="color:var(--sub);font-size:11.5px">${esc(s.pxm.slice(8, 10) + '/' + s.pxm.slice(5, 7) + ' ' + s.pxm.slice(11, 16))}</span>` : ''}</div>`);
+            if (t) lignes.push(`<div style="color:var(--sub)">Au km ${Math.round(t.km)} du trajet · à ${_km1(t.d)} km du tracé</div>`);
+            lignes.push(`<div style="margin-top:8px"></div>`);
+            if (origin && dest) lignes.push(`<button class="popup-btn popup-btn-waypoint" onclick="_pompeEtape(${s.i})">Ajouter comme étape</button>`);
+            lignes.push(`<a class="popup-btn popup-btn-cancel" style="display:grid;place-items:center;text-decoration:none" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${s.la},${s.lo}">Ouvrir dans Google Maps</a>`);
+            pompes.popup.setLngLat([s.lo, s.la]).setHTML(lignes.join('')).addTo(map);
+        }
+
+        function _pompeEtape(i) {
+            const s = POMPES[i];
+            pompes.popup.remove();
+            addWaypoint({ lng: s.lo, lat: s.la }, `${s.n}${s.v ? ', ' + s.v : ''}`);
+        }
+
+        function onPompesToggle() {
+            pompes.on = document.getElementById('opt-pompes').checked;
+            try { localStorage.setItem('cm_pompes', pompes.on ? '1' : '0'); } catch (e) {}
+            updateOptsSummary();
+            if (map.getLayer('pompesLayer')) map.setLayoutProperty('pompesLayer', 'visibility', pompes.on ? 'visible' : 'none');
+            if (!pompes.on && pompes.popup) pompes.popup.remove();
+            majPompes(true);
+            if (pompes.on && !hasRoute) toast(`${POMPES.length} pompes de ma liste affichées. Calculez un trajet pour voir celles sur la route.`, 'info');
+        }
+
+        function setCouloir(km) {
+            pompes.couloir = km;
+            try { localStorage.setItem('cm_pompes_km', String(km)); } catch (e) {}
+            majPompes(true);
+        }
+
+        // Stations à moins de « couloir » km du tracé, avec le km de passage.
+        // Projection locale équirectangulaire : assez précis pour quelques km d'écart.
+        function _pompesSurTrajet(coords, couloir) {
+            if (!coords || coords.length < 2) return [];
+            const lat0 = coords[Math.floor(coords.length / 2)][1] * Math.PI / 180;
+            const kx = 111.32 * Math.cos(lat0), ky = 110.57;
+            const pts = coords.map(c => [c[0] * kx, c[1] * ky]);
+            const cum = [0];
+            for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            pts.forEach(([x, y]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); });
+            const out = [];
+            POMPES.forEach(s => {
+                const px = s.lo * kx, py = s.la * ky;
+                if (px < minX - couloir || px > maxX + couloir || py < minY - couloir || py > maxY + couloir) return;
+                let best = Infinity, kmAt = 0;
+                for (let k = 1; k < pts.length; k++) {
+                    const [ax, ay] = pts[k - 1], [bx, by] = pts[k];
+                    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+                    let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+                    t = Math.max(0, Math.min(1, t));
+                    const d = Math.hypot(px - ax - t * dx, py - ay - t * dy);
+                    if (d < best) { best = d; kmAt = cum[k - 1] + t * Math.sqrt(l2); }
+                }
+                if (best <= couloir) out.push({ s, d: best, km: kmAt });
+            });
+            return out.sort((a, b) => a.km - b.km);
+        }
+
+        // Appelée à chaque rafraîchissement du panneau : ne recalcule que si le
+        // tracé, le couloir ou l'option ont changé.
+        function majPompes(force) {
+            if (!map.getSource || !map.getSource('pompesSource')) return;
+            const coords = hasRoute ? geojsonCoords : null;
+            if (!force && pompes.cle && pompes.cle.coords === coords && pompes.cle.km === pompes.couloir && pompes.cle.on === pompes.on) return;
+            pompes.cle = { coords, km: pompes.couloir, on: pompes.on };
+            pompes.liste = pompes.on && coords ? _pompesSurTrajet(coords, pompes.couloir) : [];
+            map.getSource('pompesSource').setData(_pompeGeo(pompes.liste));
+            pompes.pins.forEach(m => m.remove());
+            pompes.pins = pompes.liste.map((t, k) => {
+                const el = document.createElement('div');
+                el.className = 'pompe-pin'; el.textContent = k + 1;
+                el.title = `${t.s.n} · km ${Math.round(t.km)}`;
+                el.addEventListener('click', ev => { ev.stopPropagation(); _pompePopup(t.s); });
+                return new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([t.s.lo, t.s.la]).addTo(map);
+            });
+            _pompesBox();
+        }
+
+        function _pompesBox() {
+            const box = document.getElementById('pompes-box');
+            if (!pompes.on || !hasRoute) { box.classList.remove('show'); box.innerHTML = ''; return; }
+            const L = pompes.liste, MAX = 40;
+            const prix = L.filter(t => t.s.px != null);
+            const moinsCher = prix.length ? prix.reduce((a, b) => (b.s.px < a.s.px ? b : a)) : null;
+            const seg = COULOIRS.map(k => `<button class="${k === pompes.couloir ? 'on' : ''}" onclick="setCouloir(${k})">${k} km</button>`).join('');
+            const rows = L.slice(0, MAX).map((t, k) => `
+                <button class="al-row" onclick="_pompeFocus(${t.s.i})">
+                    <span class="al-ico pompe">${k + 1}</span>
+                    <span class="al-txt">${esc(t.s.n)}<small>${esc(t.s.v || '')} · à ${_km1(t.d)} km du tracé${t.s.px != null ? ` · <b${t === moinsCher ? ' style="color:#1a7f37"' : ''}>${_eur(t.s.px)}</b>` : ''}</small></span>
+                    <span class="al-km">km ${Math.round(t.km)}</span>
+                </button>`).join('');
+            box.innerHTML = `<div class="bx-title">Pompes Total sur le trajet · ${L.length}</div>
+                <div class="seg pompe-seg" role="group" aria-label="Distance maximale au tracé">${seg}</div>
+                ${L.length ? rows : `<div class="bx-hint">Aucune pompe de ma liste à moins de ${pompes.couloir} km du tracé.</div>`}
+                ${L.length > MAX ? `<div class="bx-hint">+ ${L.length - MAX} autres plus loin sur le trajet.</div>` : ''}
+                ${moinsCher ? `<div class="bx-hint">Gazole le moins cher sur le trajet : <b>${esc(moinsCher.s.n)}</b>, ${_eur(moinsCher.s.px)} (km ${Math.round(moinsCher.km)}).</div>` : ''}
+                <div class="bx-hint">Distance à vol d'oiseau entre la pompe et le tracé. « Ajouter comme étape » dans la fiche d'une pompe fait passer le trajet par elle.</div>`;
+            box.classList.add('show');
+        }
+
+        function _pompeFocus(i) {
+            const s = POMPES[i];
+            map.flyTo({ center: [s.lo, s.la], zoom: Math.max(map.getZoom(), 12), duration: 600 });
+            setTimeout(() => _pompePopup(s), 620);
+        }
 
         // ═══════════════════════════════════════════════════════
         //  SAISIE DÉPART / ARRIVÉE AVEC SUGGESTIONS

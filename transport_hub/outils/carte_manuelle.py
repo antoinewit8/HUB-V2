@@ -5,6 +5,10 @@ La page du HUB ne sert plus qu'à lancer la carte : un bouton ouvre map.html
 seul dans un nouvel onglet, sans rien de Streamlit autour (même système que
 l'Optimisateur Lavages CIT). Le départ, l'arrivée, les étapes et les options
 se définissent toujours directement dans map.html.
+
+Option « Pompes Total (ma liste) » : la liste de la page Pompes carburant
+(tools/pompes/favorites.py) est injectée dans la carte, avec le prix du gazole
+officiel en France quand il répond ; la carte affiche celles le long du trajet.
 """
 
 import json
@@ -22,6 +26,7 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.com").rstrip("/")
 
 from core import ui
+from tools.pompes.favorites import fichier_favorites, favorites_depuis, prix_france, lier_prix_france
 
 ui.page_config(ui.TOOLS_BY_KEY["carte_manuelle"]["title"])
 
@@ -78,6 +83,25 @@ def _limites_admin() -> str:
         return "null"
 
 
+def _pompes(avec_prix: bool) -> tuple[list, str]:
+    """Ma liste de pompes (compacte) pour l'option de la carte, et une remarque éventuelle."""
+    src = fichier_favorites()
+    if src is None:
+        return [], ""
+    try:
+        stations, _ = favorites_depuis(str(src), src.stat().st_mtime)
+    except Exception as e:  # noqa: BLE001
+        return [], f"Liste de pompes illisible ({e})."
+    note = ""
+    if avec_prix:
+        try:
+            lier_prix_france(stations, prix_france())
+        except Exception:  # noqa: BLE001
+            note = "Prix du gazole indisponibles pour le moment : les pompes s’affichent sans prix."
+    cles = ("n", "e", "a", "cp", "v", "p", "la", "lo", "pl", "pln", "code", "px", "pxm")
+    return [{k: s.get(k) for k in cles if s.get(k) not in (None, "")} for s in stations], note
+
+
 # ─── Page ────────────────────────────────────────────────────────────────────
 ui.page("carte_manuelle", "Itinéraires poids lourds, péages et kilomètres par pays, traversées. La carte s’ouvre en plein écran dans un nouvel onglet.")
 
@@ -86,13 +110,6 @@ reveiller_serveur(MAP_SERVER_URL)
 try:
     map_html_path = Path(__file__).parent.parent / "map.html"
     template = Template(map_html_path.read_text(encoding="utf-8"))
-    # Carte vide : map.html gère lui-même départ, arrivée, étapes et options.
-    html_final = template.render(
-        route={"origin": "", "dest": "", "polyline": []},
-        route_id="manual",
-        server_url=MAP_SERVER_URL,
-        limites_admin=_limites_admin(),
-    )
 except FileNotFoundError:
     st.error("map.html introuvable à la racine du projet.")
     st.stop()
@@ -100,7 +117,38 @@ except Exception as e:
     st.error(f"Erreur chargement map.html : {e}")
     st.stop()
 
-bouton_ouvrir(html_final)
+limites = _limites_admin()
+
+
+def rendre(pompes: list) -> str:
+    # Carte vide : map.html gère lui-même départ, arrivée, étapes et options.
+    return template.render(
+        route={"origin": "", "dest": "", "polyline": []},
+        route_id="manual",
+        server_url=MAP_SERVER_URL,
+        limites_admin=limites,
+        pompes=json.dumps(pompes, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/"),
+    )
+
+
+# Bouton tout de suite avec ma liste de pompes, puis remplacé quand les prix arrivent
+zone_bouton = st.empty()
+pompes, _ = _pompes(avec_prix=False)
+try:
+    html_final = rendre(pompes)
+except Exception as e:
+    st.error(f"Erreur chargement map.html : {e}")
+    st.stop()
+with zone_bouton.container():
+    bouton_ouvrir(html_final)
+if pompes:
+    pompes_px, note_pompes = _pompes(avec_prix=True)
+    if any("px" in s for s in pompes_px):
+        html_final = rendre(pompes_px)
+        with zone_bouton.container():
+            bouton_ouvrir(html_final)
+    if note_pompes:
+        st.caption(note_pompes)
 
 
 st.write("")
@@ -118,6 +166,7 @@ st.markdown(
     '<li><b>Étapes</b> <span>: entre le départ et l’arrivée — « Ajouter une étape », clic droit sur la carte ou recherche d’adresse. Les flèches au survol changent l’ordre ; une étape peut devenir le départ ou l’arrivée.</span></li>'
     '<li><b>Distance et péage</b> <span>: un clic sur la case affiche le détail par pays.</span></li>'
     '<li><b>Traversées</b> <span>: choisissez la ligne de ferry ou de navette dans le bloc dédié.</span></li>'
+    '<li><b>Pompes Total</b> <span>: dans Options, « Pompes Total (ma liste) » affiche la liste de la page Pompes carburant ; avec un trajet, celles à moins de 2 à 20 km du tracé sont numérotées dans l’ordre de passage, avec le prix du gazole en France.</span></li>'
     '<li><b>Plan ou Satellite</b> <span>: dans la barre en bas de la carte, avec les types de routes et les restrictions PL.</span></li>'
     '</ul>',
     unsafe_allow_html=True,
