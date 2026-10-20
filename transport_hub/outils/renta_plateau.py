@@ -220,7 +220,14 @@ class _CacheDisque:
                 return
             try:
                 os.makedirs(CACHE_DIR, exist_ok=True)
-                tmp = self.path + ".tmp"
+                try:            # fusion : Renta Plateau et Renta Citerne écrivent les mêmes fichiers
+                    with open(self.path, encoding="utf-8") as f:
+                        disque = json.load(f)
+                    disque.update(self.data)
+                    self.data = disque
+                except (OSError, ValueError):
+                    pass
+                tmp = f"{self.path}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(self.data, f, ensure_ascii=False, separators=(",", ":"))
                 os.replace(tmp, self.path)

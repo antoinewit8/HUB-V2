@@ -40,7 +40,9 @@ import json
 import math
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -172,24 +174,40 @@ def haversine_km(a, b):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PTV — géocodage et distances (mis en cache pour la session)
+#  PTV — géocodage et distances
+#  • Géocodage : d'abord la table GeoNames embarquée (hors ligne, instantané),
+#    PTV seulement pour les lieux qu'elle ne connaît pas.
+#  • Appels PTV en parallèle sur une connexion entretenue (keep-alive),
+#    au lieu d'un appel à la fois avec une nouvelle connexion TLS chacun.
+#  • Résultats gardés sur disque (data/renta_cache) : un second calcul
+#    sur les mêmes lieux / trajets ne rappelle pas PTV.
 # ══════════════════════════════════════════════════════════════════
+
+PTV_WORKERS = 8
+_HUB_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_DIR = os.path.join(_HUB_DIR, "data", "renta_cache")
+
+_SESSION = requests.Session()
+_SESSION.headers.update(HEADERS)
+_SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=PTV_WORKERS * 2))
+
 
 def _ptv_get(url, params):
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=30)
-            if resp.status_code == 429:
-                time.sleep(RETRY_DELAY * attempt)
-                continue
-            if resp.status_code != 200:
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY)
-                    continue
+            resp = _SESSION.get(url, params=params, timeout=(5, 25))
+        except requests.RequestException:
+            time.sleep(RETRY_DELAY * attempt)
+            continue
+        if resp.status_code == 200:
+            try:
+                return resp.json()
+            except ValueError:
                 return None
-            return resp.json()
-        except Exception:
-            time.sleep(RETRY_DELAY)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            time.sleep(RETRY_DELAY * attempt)
+            continue
+        return None          # 4xx (lieu inconnu, paramètre refusé…) : réessayer ne sert à rien
     return None
 
 
@@ -201,8 +219,92 @@ def _first_pos(js):
     return None
 
 
-@st.cache_data(show_spinner=False)
-def geocode_stop(ville: str, cp: str, pays: str):
+class _CacheDisque:
+    """Petit cache clé → valeur, en mémoire et dans un JSON (échecs non gardés)."""
+
+    def __init__(self, nom):
+        self.path = os.path.join(CACHE_DIR, f"{nom}.json")
+        self.lock = threading.Lock()
+        self.nouveau = False
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                self.data = json.load(f)
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, k):
+        return self.data.get(k)
+
+    def set(self, k, v):
+        if v is None:
+            return
+        with self.lock:
+            self.data[k] = v
+            self.nouveau = True
+
+    def save(self):
+        with self.lock:
+            if not self.nouveau:
+                return
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                try:            # fusion : Renta Plateau et Renta Citerne écrivent les mêmes fichiers
+                    with open(self.path, encoding="utf-8") as f:
+                        disque = json.load(f)
+                    disque.update(self.data)
+                    self.data = disque
+                except (OSError, ValueError):
+                    pass
+                tmp = f"{self.path}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, ensure_ascii=False, separators=(",", ":"))
+                os.replace(tmp, self.path)
+                self.nouveau = False
+            except OSError:
+                pass
+
+
+_CACHE_GEO = _CacheDisque("geocode")
+_CACHE_KM = _CacheDisque("km_ptv")
+
+_GEO_LOCK = threading.Lock()
+_GEO_HL = {}        # géocodeur hors ligne (chargé une fois)
+
+
+def _geocodeur_hors_ligne():
+    with _GEO_LOCK:
+        if "geo" not in _GEO_HL:
+            try:
+                import sys
+                if _HUB_DIR not in sys.path:
+                    sys.path.insert(0, _HUB_DIR)
+                from tools.werbomont import engine as W
+                _GEO_HL["W"], _GEO_HL["geo"] = W, W.Geocodeur()
+            except Exception:
+                _GEO_HL["W"], _GEO_HL["geo"] = None, None
+        return _GEO_HL["W"], _GEO_HL["geo"]
+
+
+def _geo_hors_ligne(ville, cp, pays):
+    """GeoNames : CP + localité, CP seul ou localité seule. La zone CP (2 chiffres) est trop vague → PTV."""
+    W, geo = _geocodeur_hors_ligne()
+    if geo is None:
+        return None
+    iso = PAYS_CODE_TO_ISO2.get(pays.upper(), "") or W.norm_iso(pays)
+    if not iso:
+        return None
+    cpn, lieu = W.norm_cp(cp, iso), W.norm_txt(ville)
+    la, lo, prec = geo(iso, cpn, lieu)
+    if iso == "LU" and cpn and prec not in ("manuel", "cp+localité", "cp"):
+        la2, lo2, prec2 = geo(iso, "L-" + cpn, lieu)
+        if la2 is not None:
+            la, lo, prec = la2, lo2, prec2
+    if la is not None and prec in ("manuel", "cp+localité", "cp", "localité"):
+        return (round(float(la), 6), round(float(lo), 6))
+    return None
+
+
+def _geo_ptv(ville, cp, pays):
     """Priorité : CP + pays → ville, CP, pays → ville, pays → ville seule."""
     iso2 = PAYS_CODE_TO_ISO2.get(pays.upper(), "")
     full = PAYS_CODE_TO_FULL.get(pays.upper(), "")
@@ -220,18 +322,53 @@ def geocode_stop(ville: str, cp: str, pays: str):
     return None
 
 
-@st.cache_data(show_spinner=False)
+def geocode_stop(ville: str, cp: str, pays: str):
+    ville, cp, pays = _clean(ville), _clean(cp), _clean(pays)
+    k = f"{ville}|{cp}|{pays}"
+    r = _CACHE_GEO.get(k)
+    if r:
+        return tuple(r)
+    r = _geo_hors_ligne(ville, cp, pays) or _geo_ptv(ville, cp, pays)
+    _CACHE_GEO.set(k, list(r) if r else None)
+    return r
+
+
 def route_km(a: tuple, b: tuple):
     """Distance routière PTV (poids lourd) entre deux points GPS, en km."""
     if not a or not b:
         return None
     if haversine_km(a, b) < 0.3:
         return 0.0
+    k = f"{a[0]:.5f},{a[1]:.5f}|{b[0]:.5f},{b[1]:.5f}"
+    r = _CACHE_KM.get(k)
+    if r is not None:
+        return r
     js = _ptv_get(f"{PTV_BASE_URL}/routes",
                   [("profile", VEHICLE), ("waypoints", f"{a[0]},{a[1]}"), ("waypoints", f"{b[0]},{b[1]}")])
     if js is None:
         return None
-    return round(js.get("distance", 0) / 1000, 1)
+    r = round(js.get("distance", 0) / 1000, 1)
+    _CACHE_KM.set(k, r)
+    return r
+
+
+def _en_parallele(fn, items, progress_cb, libelle, debut, poids):
+    """Appelle fn(*item) pour chaque item sur PTV_WORKERS fils ; la progression reste dans le fil Streamlit."""
+    res, n = {}, len(items)
+    if not n:
+        return res
+    pas = max(1, n // 200)
+    with ThreadPoolExecutor(max_workers=PTV_WORKERS) as ex:
+        futs = {ex.submit(fn, *it): it for it in items}
+        for i, f in enumerate(as_completed(futs), 1):
+            it = futs[f]
+            try:
+                res[it] = f.result()
+            except Exception:
+                res[it] = None
+            if progress_cb and (i % pas == 0 or i == n):
+                progress_cb(f"{libelle} {i}/{n}", debut + i / n * poids)
+    return res
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -799,22 +936,21 @@ def calculer(stops, ca_dict, convention, reconstituer, progress_cb=None, geocode
     # 1. Géocodage des lieux uniques
     lieux = sorted({t["de"] for t in trajets} | {t["a"] for t in trajets}
                    | {_lieu(r) for r in stops.to_dict("records")})
-    coords = {}
-    for i, l in enumerate(lieux):
-        if progress_cb:
-            progress_cb(f"Géocodage {i + 1}/{len(lieux)} : {l[0]} {l[1]}", i / max(len(lieux), 1) * 0.3)
-        coords[l] = geocoder(*l)
-        if coords[l] is None and (l[0] or l[1]):
+    coords = _en_parallele(geocoder, lieux, progress_cb, "Géocodage", 0.0, 0.3)
+    for l in lieux:
+        if coords.get(l) is None and (l[0] or l[1]):
             controles.append(dict(tracteur="", dossier="", type="Géocodage échoué",
                                   detail=f"{l[0]} {l[1]} ({l[2]}) — km des trajets concernés non calculés."))
 
-    # 2. Km PTV par trajet
-    for i, t in enumerate(trajets):
-        if progress_cb:
-            progress_cb(f"Km {i + 1}/{len(trajets)} : {t['de'][0]} → {t['a'][0]}",
-                        0.3 + i / max(len(trajets), 1) * 0.7)
+    # 2. Km PTV par trajet (une seule fois par couple de points, en parallèle)
+    paires = sorted({(coords.get(t["de"]), coords.get(t["a"])) for t in trajets
+                     if t["de"] != t["a"] and coords.get(t["de"]) and coords.get(t["a"])})
+    kms = _en_parallele(distance, paires, progress_cb, "Km PTV", 0.3, 0.7)
+    _CACHE_GEO.save()
+    _CACHE_KM.save()
+    for t in trajets:
         a, b = coords.get(t["de"]), coords.get(t["a"])
-        t["km"] = 0.0 if t["de"] == t["a"] else distance(a, b)
+        t["km"] = 0.0 if t["de"] == t["a"] else (kms.get((a, b)) if a and b else distance(a, b))
         t["lat_de"], t["lon_de"] = (a or (np.nan, np.nan))
         t["lat_a"], t["lon_a"] = (b or (np.nan, np.nan))
         odo = t["a_odo"] - t["de_odo"] if pd.notna(t["a_odo"]) and pd.notna(t["de_odo"]) else np.nan
