@@ -1,16 +1,24 @@
 """
-tools/aide_planning/planeur.py — données de la frise « planeur » d'Aide planning.
+tools/aide_planning/planeur.py — calculs d'Aide planning, pensés pour la vitesse.
 
-Entrée : les activités préparées par la page (colonnes dossier, type C/D/A, _act_raw,
-date, _hval, _dt, localite, cp, pays, site, chauffeur, immat, remorque, produit,
-type_tr, is_tra, lieu_cle). Sortie : jours (en-tête), lignes (une par ressource,
-segments en fraction de la période) et le détail de chaque dossier.
+Deux étages :
+  1. table_dossiers(df, coords) — UNE fois par fichier (mise en cache par la page) :
+     une ligne par dossier (début, fin, 1er chargement, dernier déchargement, sites,
+     ressources, km chargés) + les autres activités (lavages, décrochages…).
+  2. vue(...) — à chaque changement de période ou de filtre : frise, indicateurs et
+     tableau des ressources, calculés sur cette table (boucles Python sur quelques
+     milliers de dossiers, aucun filtre pandas dans les boucles).
+
+Entrée : activités préparées par la page (dossier, type C/D/A, _act_raw, date, _hval,
+_dt, localite, cp, pays, site, chauffeur, immat, remorque, produit, type_tr, is_tra,
+lieu_cle).
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import math
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -19,8 +27,11 @@ JOURS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
 MAX_LIGNES = 40
 DUREE_AUTRE_H = 1.5            # largeur affichée d'un lavage / décrochage
 LAVAGE = ("LAV", "NETT", "WASH", "REIN", "SPOEL", "CLEAN")
+COEF_ROUTE = 1.30
+DIMS = {"Remorque": "remorque", "Tracteur": "immat", "Chauffeur": "chauffeur"}
 
 
+# ─── Période ────────────────────────────────────────────────────────────────
 def fenetre(mode: str, pivot: dt.date, plage=None):
     """Période affichée [T0, T1[ : Jour, Semaine (lundi → dimanche), Mois, ou plage libre."""
     if mode == "Jour":
@@ -54,7 +65,7 @@ def libelle_periode(t0, t1) -> str:
 
 
 def en_tete(t0, t1, aujourdhui=None):
-    """Colonnes de la grille : heures pour un jour, jours sinon (au-delà de 31 jours : semaines)."""
+    """Colonnes de la grille : heures pour un jour, jours jusqu'à 31, semaines au-delà."""
     n = (t1 - t0).days
     aujourdhui = aujourdhui or dt.date.today()
     if n <= 1:
@@ -73,6 +84,14 @@ def en_tete(t0, t1, aujourdhui=None):
     return out
 
 
+def position_maintenant(t0, t1, maintenant=None):
+    m = maintenant or pd.Timestamp.now()
+    if t0 <= m < t1:
+        return (m - t0).total_seconds() / (t1 - t0).total_seconds()
+    return None
+
+
+# ─── Outils ─────────────────────────────────────────────────────────────────
 def _court(lieu) -> str:
     s = str(lieu or "").strip()
     return s.title() if s.isupper() else s
@@ -91,121 +110,186 @@ def _vol(a, b) -> float:
     return 12742 * math.asin(math.sqrt(min(1.0, h)))
 
 
-def details_dossier(h: pd.DataFrame, coords: dict, coef: float = 1.30) -> dict:
-    """Fiche d'un dossier (ses activités triées)."""
-    c = h[h["type"] == "C"]
-    d = h[h["type"] == "D"]
-    a = h[h["type"] == "A"]
-    c0 = c.iloc[0] if len(c) else None
-    d1 = d.iloc[-1] if len(d) else None
-    seq = [coords.get(k) for k in h.loc[h["type"].isin(["C", "D"]), "lieu_cle"]]
-    seq = [p for p in seq if p]
-    km = sum(_vol(seq[i], seq[i + 1]) for i in range(len(seq) - 1)) * coef if len(seq) > 1 else float("nan")
-    base = c0 if c0 is not None else (d1 if d1 is not None else h.iloc[0])
+def _chemin(points) -> float:
+    pts = [p for p in points if p]
+    if len(pts) < 2:
+        return float("nan")
+    return sum(_vol(pts[i], pts[i + 1]) for i in range(len(pts) - 1)) * COEF_ROUTE
+
+
+# ─── Étage 1 : une ligne par dossier (une fois par fichier) ─────────────────
+def table_dossiers(df: pd.DataFrame, coords: dict) -> tuple[pd.DataFrame, dict]:
+    """(table des dossiers indexée par n° de dossier, {dossier: [autres activités]})."""
+    d = df.sort_values(["dossier", "_dt", "_hval"], kind="stable")
+    g = d.groupby("dossier", sort=False)
+    t = g.agg(debut_any=("_dt", "min"), fin_any=("_dt", "max"),
+              remorque=("remorque", "first"), immat=("immat", "first"), chauffeur=("chauffeur", "first"),
+              is_tra=("is_tra", "any"), type_tr=("type_tr", "first"))
+    cols = ["_dt", "localite", "cp", "pays", "site", "lieu_cle"]
+    c = d[d["type"] == "C"]
+    de = d[d["type"] == "D"]
+    t = t.join(c.groupby("dossier", sort=False)[cols].first().add_prefix("c")) \
+         .join(de.groupby("dossier", sort=False)[cols].last().add_prefix("d"))
+    t["nb_c"] = c.groupby("dossier").size().reindex(t.index).fillna(0).astype(int)
+    t["nb_d"] = de.groupby("dossier").size().reindex(t.index).fillna(0).astype(int)
+    prod = d[d["produit"].astype(str).str.strip().ne("")].groupby("dossier")["produit"].first()
+    t["produit"] = prod.reindex(t.index).fillna("")
+    for k in ("c_dt", "d_dt"):
+        if k not in t:
+            t[k] = pd.NaT
+    for k in ("clocalite", "ccp", "cpays", "csite", "clieu_cle", "dlocalite", "dcp", "dpays", "dsite", "dlieu_cle"):
+        t[k] = t[k].fillna("") if k in t else ""
+    t = t.rename(columns={"c_dt": "c_dt", "d_dt": "d_dt"})
+    t["debut"] = t["c_dt"].fillna(t["debut_any"])
+    t["fin"] = t["d_dt"].fillna(t["fin_any"])
+    court = t["fin"] <= t["debut"]
+    t.loc[court, "fin"] = t.loc[court, "debut"] + pd.Timedelta(hours=2)
+
+    # km chargés : suite des chargements / déchargements du dossier
+    cd = d[d["type"].isin(["C", "D"])].groupby("dossier", sort=False)["lieu_cle"].agg(list)
+    t["km_charge"] = [_chemin([coords.get(k) for k in cd.get(dos, [])]) for dos in t.index]
+
+    # autres activités (lavage, décrochage…) : (date, libellé, localité, lieu)
+    a = d[d["type"] == "A"]
+    autres = defaultdict(list)
+    for dos, when, act, loc, cle in zip(a["dossier"], a["_dt"], a["_act_raw"], a["localite"], a["lieu_cle"]):
+        autres[dos].append((when, str(act), str(loc), cle))
+    return t, dict(autres)
+
+
+def fiche(t: pd.DataFrame, autres: dict, dossier: str, coords: dict) -> dict | None:
+    """Fiche d'un dossier pour le panneau de droite."""
+    if dossier not in t.index:
+        return None
+    r = t.loc[dossier]
+    apres = [x for x in autres.get(dossier, []) if pd.isna(r["d_dt"]) or x[0] >= r["d_dt"]]
     return {
-        "dossier": str(base["dossier"]),
-        "charg": _court(c0["localite"]) if c0 is not None else "",
-        "charg_pays": c0["pays"] if c0 is not None else "",
-        "charg_site": c0["site"] if c0 is not None else "",
-        "charg_quand": _heure(c0["_dt"]) if c0 is not None else "",
-        "nb_charg": len(c), "nb_dech": len(d),
-        "dech": _court(d1["localite"]) if d1 is not None else "",
-        "dech_pays": d1["pays"] if d1 is not None else "",
-        "dech_site": d1["site"] if d1 is not None else "",
-        "dech_quand": _heure(d1["_dt"]) if d1 is not None else "",
-        "dech_point": coords.get(d1["lieu_cle"]) if d1 is not None else None,
-        "autres": ", ".join(f'{str(x).title()} ({_court(l)})' for x, l in zip(a["_act_raw"], a["localite"])),
-        "chauffeur": base["chauffeur"], "tracteur": base["immat"], "remorque": base["remorque"],
-        "produit": next((p for p in h["produit"] if str(p).strip()), ""),
-        "metier": base.get("type_tr", ""), "tra": bool(h["is_tra"].any()),
-        "km_charge": None if np.isnan(km) else round(km),
+        "dossier": str(dossier),
+        "charg": _court(r["clocalite"]), "charg_pays": r["cpays"], "charg_site": r["csite"],
+        "charg_quand": _heure(r["c_dt"]) if pd.notna(r["c_dt"]) else "",
+        "dech": _court(r["dlocalite"]), "dech_pays": r["dpays"], "dech_site": r["dsite"],
+        "dech_quand": _heure(r["d_dt"]) if pd.notna(r["d_dt"]) else "",
+        "dech_point": coords.get(r["dlieu_cle"]) if r["dlieu_cle"] else None,
+        "nb_charg": int(r["nb_c"]), "nb_dech": int(r["nb_d"]),
+        "autres": ", ".join(f"{a.title()} ({_court(l)})" for _, a, l, _ in apres),
+        "chauffeur": r["chauffeur"], "tracteur": r["immat"], "remorque": r["remorque"],
+        "produit": r["produit"], "tra": bool(r["is_tra"]),
+        "km_charge": None if pd.isna(r["km_charge"]) else round(r["km_charge"]),
     }
 
 
-def construire(dfx: pd.DataFrame, dim_col: str, t0, t1, coords: dict, vides: dict, synthese: pd.DataFrame | None,
-               maintenant=None, couverture=None) -> tuple[list, list, dict]:
-    """(jours, lignes, détails) pour la frise. `couverture` = (1er jour, dernier jour) de l'export :
-    hors de ces dates, une journée vide n'est pas « sans activité », elle est hors fichier."""
+# ─── Étage 2 : une période, une dimension ───────────────────────────────────
+def vue(t: pd.DataFrame, autres: dict, activites: pd.DataFrame, dim: str, t0, t1, coords: dict,
+        couverture=None, maintenant=None) -> dict:
+    """Frise + tableau des ressources + indicateurs pour [t0, t1[.
+
+    `t` : table des dossiers déjà filtrée (flotte, métier, recherche).
+    `activites` : activités des mêmes dossiers (pour les jours actifs et les écarts).
+    """
+    col = DIMS[dim]
     total = (t1 - t0).total_seconds()
     marge = pd.Timedelta(days=3)
 
-    def f(t):
-        return min(max((t - t0).total_seconds() / total, 0.0), 1.0)
+    def f(x):
+        return min(max((x - t0).total_seconds() / total, 0.0), 1.0)
 
-    def dans(a, b):
-        return b > t0 and a < t1
+    # Dossiers utiles : ceux qui touchent la période (± marge pour les trajets à vide)
+    proche = t[(t["fin_any"] >= t0 - marge) & (t["debut_any"] < t1 + marge) & t[col].astype(str).str.strip().ne("")]
+    dans = proche[(proche["fin"] > t0) & (proche["debut"] < t1)]
+    act_p = activites[(activites["_dt"] >= t0) & (activites["_dt"] < t1)]
+    act_p = act_p[act_p[col].astype(str).str.strip().ne("")]
 
-    jours = en_tete(t0, t1, (maintenant or pd.Timestamp.now()).date() if maintenant is not None else None)
-    zone = dfx[(dfx["_dt"] >= t0 - marge) & (dfx["_dt"] < t1 + marge)]
-    zone = zone[zone[dim_col].astype(str).str.strip().ne("")]
-    actifs_periode = zone[(zone["_dt"] >= t0) & (zone["_dt"] < t1)]
-    ordre = actifs_periode.groupby(dim_col).size().sort_values(ascending=False).index.tolist()[:MAX_LIGNES]
-    info = synthese.set_index("Ressource") if synthese is not None and not synthese.empty else pd.DataFrame()
     ouvres = [d.date() for d in pd.bdate_range(t0, t1 - pd.Timedelta(seconds=1))]
     if couverture:
         ouvres = [d for d in ouvres if couverture[0] <= d <= couverture[1]]
+    jours_actifs = act_p.groupby(col)["date"].agg(lambda s: set(s.dt.date)).to_dict()
+    ecarts = (act_p.sort_values("_dt").groupby(col)["_dt"].agg(lambda s: s.diff().max())
+              .map(lambda x: x.total_seconds() / 3600 if pd.notna(x) else np.nan).to_dict())
 
-    lignes, details = [], {}
-    for r in ordre:
-        g = zone[zone[dim_col] == r].sort_values(["_dt", "_hval"], kind="stable")
+    dans_set = set(dans.index)
+    lignes, synthese = [], []
+    ordre = act_p.groupby(col).size().sort_values(ascending=False).index.tolist()
+    for r, grp in proche.sort_values("debut").groupby(col, sort=False):
         segs = []
-        fin_prec = None
-        for dos, h in sorted(g.groupby("dossier", sort=False), key=lambda x: x[1]["_dt"].min()):
-            h = h.sort_values(["_dt", "_hval"], kind="stable")
-            details[str(dos)] = details_dossier(h, coords)
-            c = h[h["type"] == "C"]
-            d = h[h["type"] == "D"]
-            debut = c["_dt"].iloc[0] if len(c) else h["_dt"].iloc[0]
-            fin = d["_dt"].iloc[-1] if len(d) else h["_dt"].iloc[-1]
-            if fin <= debut:
-                fin = debut + pd.Timedelta(hours=2)
-            # à vide depuis la fin du dossier précédent
-            if fin_prec is not None and debut - fin_prec > pd.Timedelta(minutes=30) and dans(fin_prec, debut):
-                km = vides.get((r, dos))
-                segs.append({"k": "v", "a": f(fin_prec), "b": f(debut),
-                             "label": f"~{km:.0f} km" if km else "",
-                             "titre": (f"À vide : ~{km:.0f} km estimés" if km else "Entre deux dossiers")
-                                      + f"\n{_heure(fin_prec)} → {_heure(debut)}"})
-            if dans(debut, fin):
-                det = details[str(dos)]
-                lab = f'{det["charg"] or "?"} → {det["dech"] or "?"}'
-                titre = (f'Dossier {dos}\nChargement {det["charg_quand"]} · {det["charg"]}'
-                         f'\nDéchargement {det["dech_quand"]} · {det["dech"]}'
-                         + (f'\n{det["chauffeur"]}' if det["chauffeur"] else "")
-                         + (f' · {det["produit"]}' if det["produit"] else ""))
-                segs.append({"k": "c", "a": f(debut), "b": f(fin), "label": lab, "titre": titre, "id": str(dos)})
-            fin_prec = fin
-            for _, x in h[h["type"] == "A"].iterrows():
-                a = x["_dt"]
-                if a < debut:
-                    continue
-                b = a + pd.Timedelta(hours=DUREE_AUTRE_H)
-                if dans(a, b):
-                    lav = any(m in str(x["_act_raw"]).upper() for m in LAVAGE)
-                    segs.append({"k": "l" if lav else "a", "a": f(a), "b": f(b),
-                                 "label": str(x["_act_raw"]).title(),
-                                 "titre": f'{str(x["_act_raw"]).title()} · {_court(x["localite"])}\n{_heure(a)}'})
-                fin_prec = max(fin_prec, b)
-        actifs = set(g["date"].dropna().dt.date)
-        for j in ouvres:
-            if j not in actifs and len(jours) > 1:
+        km_ch = km_vide = 0.0
+        n_vide = 0
+        prec = None                       # dossier précédent de la ressource
+        for dos, x in zip(grp.index, grp.itertuples()):
+            # à vide : dernier déchargement → autres activités → 1er chargement de celui-ci
+            if prec is not None:
+                p_dos, p = prec
+                av = [(w, a, l, k) for (w, a, l, k) in autres.get(p_dos, []) if pd.isna(p.d_dt) or w >= p.d_dt]
+                pts = [coords.get(p.dlieu_cle)] + [coords.get(k) for *_, k in av] + [coords.get(x.clieu_cle)]
+                km = _chemin(pts) if x.clieu_cle and p.dlieu_cle else float("nan")
+                fin_p = max([p.fin] + [w + pd.Timedelta(hours=DUREE_AUTRE_H) for w, *_ in av])
+                if x.debut - fin_p > pd.Timedelta(minutes=30) and fin_p < t1 and x.debut > t0:
+                    segs.append({"k": "v", "a": f(fin_p), "b": f(x.debut),
+                                 "label": f"~{km:.0f} km" if km == km else "",
+                                 "titre": (f"À vide : ~{km:.0f} km estimés" if km == km else "Entre deux dossiers")
+                                          + f"\n{_heure(fin_p)} → {_heure(x.debut)}"})
+                if t0 <= x.debut < t1 and km == km:
+                    km_vide += km
+                    n_vide += 1
+            if x.fin > t0 and x.debut < t1:
+                lab = f"{_court(x.clocalite) or '?'} → {_court(x.dlocalite) or '?'}"
+                titre = (f"Dossier {dos}\nChargement {_heure(x.c_dt)} · {_court(x.clocalite)}"
+                         f"\nDéchargement {_heure(x.d_dt)} · {_court(x.dlocalite)}"
+                         + (f"\n{x.chauffeur}" if x.chauffeur else "") + (f" · {x.produit}" if x.produit else ""))
+                segs.append({"k": "c", "a": f(x.debut), "b": f(x.fin), "label": lab, "titre": titre, "id": str(dos)})
+            if t0 <= x.debut < t1 and x.km_charge == x.km_charge:
+                km_ch += x.km_charge
+            for w, act, loc, _ in autres.get(dos, []):
+                if w >= x.debut and w < t1 and w + pd.Timedelta(hours=DUREE_AUTRE_H) > t0:
+                    lav = any(m in act.upper() for m in LAVAGE)
+                    segs.append({"k": "l" if lav else "a", "a": f(w), "b": f(w + pd.Timedelta(hours=DUREE_AUTRE_H)),
+                                 "label": act.title(), "titre": f"{act.title()} · {_court(loc)}\n{_heure(w)}"})
+            prec = (dos, x)
+        n_dans = sum(1 for d in grp.index if d in dans_set)
+        if r not in jours_actifs and not n_dans:
+            continue                      # aucune activité sur la période
+        actifs = jours_actifs.get(r, set())
+        # Jour « sans activité » : aucune activité ce jour-là ET aucun trajet (en charge ou à vide)
+        # qui le traverse — un camion qui roule à vide toute la journée n'est pas à l'arrêt.
+        couverts = [(s_["a"], s_["b"]) for s_ in segs if s_["k"] in ("c", "v")]
+
+        def _couvert(j):
+            a_ = f(pd.Timestamp(j) + pd.Timedelta(hours=6))
+            b_ = f(pd.Timestamp(j) + pd.Timedelta(hours=18))
+            return any(a1 < b_ and b1 > a_ for a1, b1 in couverts)
+        sans = [j for j in ouvres if j not in actifs and not _couvert(j)]
+        if len(ouvres) and (t1 - t0).days > 1:
+            for j in sans:
                 a = pd.Timestamp(j)
                 segs.append({"k": "o", "a": f(a), "b": f(a + pd.Timedelta(days=1)), "label": "sans activité",
                              "titre": f"Aucune activité le {JOURS[a.dayofweek].lower()} {a:%d/%m}"})
+        tra = bool(grp["is_tra"].any())
         sous = []
-        if dim_col != "chauffeur":
-            ch = sorted({x for x in g["chauffeur"] if str(x).strip()})
+        if col != "chauffeur":
+            ch = sorted({c for d, c in zip(grp.index, grp["chauffeur"]) if d in dans_set and str(c).strip()})
             if ch:
                 sous.append(", ".join(ch[:2]) + ("…" if len(ch) > 2 else ""))
-        if r in info.index and info.loc[r, "Km à vide estimés"]:
-            sous.append(f'~{int(info.loc[r, "Km à vide estimés"])} km à vide')
-        lignes.append({"nom": str(r), "sous": " · ".join(sous), "tra": bool(g["is_tra"].any()),
+        if km_vide:
+            sous.append(f"~{km_vide:.0f} km à vide")
+        lignes.append({"nom": str(r), "sous": " · ".join(sous), "tra": tra,
                        "segs": sorted(segs, key=lambda s: {"o": 0, "v": 1, "a": 2, "l": 2, "c": 3}[s["k"]])})
-    return jours, lignes, details
-
-
-def position_maintenant(t0, t1, maintenant=None):
-    m = maintenant or pd.Timestamp.now()
-    if t0 <= m < t1:
-        return (m - t0).total_seconds() / (t1 - t0).total_seconds()
-    return None
+        synthese.append({
+            "Ressource": r, "Dossiers": n_dans, "Jours actifs": len(actifs),
+            "Jours ouvrés sans activité": len(sans),
+            "Dates sans activité": ", ".join(x.strftime("%d/%m") for x in sans[:8]) + (" …" if len(sans) > 8 else ""),
+            "Plus long écart (h)": round(ecarts.get(r, np.nan), 0) if ecarts.get(r) == ecarts.get(r) else np.nan,
+            "Km chargés estimés": round(km_ch), "Km à vide estimés": round(km_vide),
+            "Part à vide": km_vide / (km_ch + km_vide) if (km_ch + km_vide) > 0 else np.nan,
+            "Repositionnements": n_vide,
+        })
+    rang = {r: i for i, r in enumerate(ordre)}
+    lignes.sort(key=lambda l: rang.get(l["nom"], len(rang)))
+    tab = pd.DataFrame(synthese)
+    if not tab.empty:
+        tab = tab.sort_values(["Jours ouvrés sans activité", "Part à vide"], ascending=[False, False])
+    return {
+        "jours": en_tete(t0, t1),
+        "lignes": lignes[:MAX_LIGNES], "n_lignes": len(lignes),
+        "synthese": tab,
+        "dossiers_periode": dans.index.tolist(),
+        "maintenant": position_maintenant(t0, t1, maintenant),
+    }

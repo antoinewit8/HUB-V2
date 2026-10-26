@@ -300,61 +300,6 @@ def load_activites(file_bytes):
                     if C["activite"] else pd.Series(dtype=int))
     return out, C, act_distinct, _date_order
 
-def build_dossier_legs(df):
-    legs = {}
-    for dos, g in df.groupby("dossier"):
-        ch = g[g["type"] == "C"].sort_values(["date", "_hval"], na_position="last")
-        de = g[g["type"] == "D"].sort_values(["date", "_hval"], na_position="last")
-        c0 = ch.iloc[0] if len(ch) else None
-        d0 = de.iloc[-1] if len(de) else None
-        legs[dos] = {
-            "c_loc": c0["localite"] if c0 is not None else "",
-            "c_date": c0["date"]    if c0 is not None else pd.NaT,
-            "c_cp":   c0["cp"]      if c0 is not None else "",
-            "c_pays": c0["pays"]    if c0 is not None else "",
-            "c_cle":  c0["lieu_cle"] if c0 is not None else "",
-            "d_loc":  d0["localite"]if d0 is not None else "",
-            "d_date": d0["date"]    if d0 is not None else pd.NaT,
-            "d_cp":   d0["cp"]      if d0 is not None else "",
-            "d_pays": d0["pays"]    if d0 is not None else "",
-            "d_cle":  d0["lieu_cle"] if d0 is not None else "",
-        }
-    return legs
-
-def build_trips(d):
-    trips = []
-    for dos, g in d.groupby("dossier"):
-        ch = g[g["type"] == "C"].sort_values(["date", "_hval"], na_position="last")
-        de = g[g["type"] == "D"].sort_values(["date", "_hval"], na_position="last")
-        c  = ch.iloc[0]  if len(ch) else None
-        dd = de.iloc[-1] if len(de) else None
-        base = c if c is not None else dd
-        if base is None:
-            continue
-        trips.append({
-            "dossier": dos,
-            "has_c": c is not None, "has_d": dd is not None,
-            "c_date": c["date"]   if c is not None else pd.NaT,
-            "c_heure":c["heure"]  if c is not None else "",
-            "c_loc":  c["localite"]if c is not None else "",
-            "c_dept": c["dept"]   if c is not None else "",
-            "c_pays": c["pays"]   if c is not None else "",
-            "c_site": c["site"]   if c is not None else "",
-            "d_date": dd["date"]  if dd is not None else pd.NaT,
-            "d_heure":dd["heure"] if dd is not None else "",
-            "d_loc":  dd["localite"]if dd is not None else "",
-            "d_dept": dd["dept"]  if dd is not None else "",
-            "d_pays": dd["pays"]  if dd is not None else "",
-            "d_site": dd["site"]  if dd is not None else "",
-            "chauffeur": base["chauffeur"], "immat": base["immat"],
-            "remorque": base["remorque"],   "depart_trac": base["depart_trac"],
-            "is_tra": bool(g["is_tra"].any()),
-            "produit": (c["produit"] if c is not None and c["produit"] else base["produit"]),
-            "plan_date": (c["date"]  if c is not None else dd["date"]),
-            "plan_hval": float(c["_hval"] if c is not None else dd["_hval"]),
-        })
-    return trips
-
 def html(s: str):
     st.markdown("\n".join(line.lstrip() for line in s.splitlines()), unsafe_allow_html=True)
 
@@ -371,78 +316,6 @@ def build_pays_panel(points_list, show_mode_param):
         if pl != ps_norm:
             pays_detail[pl].append((p["nom"], p["camions"]))
     return {k: len(v) for k, v in pays_dos.items()}, pays_detail
-
-# ─── Analyse par ressource : trous et km à vide ─────────────────────────────
-COEF_ROUTE = 1.30        # vol d'oiseau → route PL (même coefficient que Werbomont / Renta)
-
-
-def _vol_km(a, b):
-    if a is None or b is None:
-        return np.nan
-    r = np.pi / 180
-    h = (np.sin((b[0] - a[0]) * r / 2) ** 2
-         + np.cos(a[0] * r) * np.cos(b[0] * r) * np.sin((b[1] - a[1]) * r / 2) ** 2)
-    return 12742 * np.arcsin(np.sqrt(min(1.0, h)))
-
-
-def coords_lieux(d):
-    """lieu_cle → (lat, lon) pour les lieux de d (table CP, PTV si inconnu)."""
-    u = d.drop_duplicates("lieu_cle")
-    return {k: geocode_cached(l, c, p) for k, l, c, p in zip(u["lieu_cle"], u["localite"], u["cp"], u["pays"])}
-
-
-def analyse_ressources(d, dim_col, d0, d1, coords):
-    """Par ressource : jours ouvrés sans activité, plus long écart, km chargés / à vide estimés.
-    Retourne (tableau, {(ressource, dossier suivant): km à vide})."""
-    jours_ouvres = set(pd.bdate_range(d0, d1).date) if d0 is not None and d1 is not None else set()
-    lignes, vides = [], {}
-    for r, g in d[d[dim_col].astype(str).str.strip().ne("")].groupby(dim_col):
-        g = g.sort_values(["date", "_hval"], na_position="last")
-        actifs = set(g["date"].dropna().dt.date)
-        dt = g["_dt"].dropna().sort_values()
-        ecart = dt.diff().max().total_seconds() / 3600 if len(dt) > 1 else np.nan
-        # Dossiers dans l'ordre de leur 1re activité. Vide = dernier déchargement → activités sans
-        # chargement entre les deux (lavage, décrochage…) → 1er chargement du dossier suivant.
-        ordre = g.groupby("dossier", sort=False)["_dt"].min().sort_values().index.tolist()
-        km_ch = km_vide = 0.0
-        n_vide = 0
-        trajet = None                       # points depuis le dernier déchargement
-        for dos in ordre:
-            h = g[g["dossier"] == dos]
-            pos = np.arange(len(h))
-            ic = pos[h["type"].eq("C").to_numpy()]
-            idn = pos[h["type"].eq("D").to_numpy()]
-            pts = [coords.get(k) for k in h["lieu_cle"]]
-            if len(ic) and len(idn):
-                seq = [pts[i] for i in range(ic[0], idn[-1] + 1) if h["type"].iat[i] in ("C", "D") and pts[i]]
-                km_ch += sum(_vol_km(seq[i], seq[i + 1]) for i in range(len(seq) - 1)) * COEF_ROUTE
-            if trajet is not None and len(ic):
-                avant = [pts[i] for i in range(ic[0]) if h["type"].iat[i] == "A" and pts[i]]
-                chemin = trajet + avant + ([pts[ic[0]]] if pts[ic[0]] else [])
-                if len(chemin) > 1 and pts[ic[0]]:
-                    v = sum(_vol_km(chemin[i], chemin[i + 1]) for i in range(len(chemin) - 1)) * COEF_ROUTE
-                    if not np.isnan(v):
-                        vides[(r, dos)] = v
-                        km_vide += v
-                        n_vide += 1
-            if len(idn) and pts[idn[-1]]:
-                trajet = [pts[idn[-1]]] + [pts[i] for i in range(idn[-1] + 1, len(h))
-                                           if h["type"].iat[i] == "A" and pts[i]]
-        sans = sorted(jours_ouvres - actifs)
-        lignes.append({
-            "Ressource": r, "Dossiers": g["dossier"].nunique(), "Jours actifs": len(actifs),
-            "Jours ouvrés sans activité": len(sans),
-            "Dates sans activité": ", ".join(x.strftime("%d/%m") for x in sans[:8]) + (" …" if len(sans) > 8 else ""),
-            "Plus long écart (h)": round(ecart, 0) if pd.notna(ecart) else np.nan,
-            "Km chargés estimés": round(km_ch), "Km à vide estimés": round(km_vide),
-            "Part à vide": km_vide / (km_ch + km_vide) if (km_ch + km_vide) > 0 else np.nan,
-            "Repositionnements": n_vide,
-        })
-    t = pd.DataFrame(lignes)
-    if not t.empty:
-        t = t.sort_values(["Jours ouvrés sans activité", "Part à vide"], ascending=[False, False])
-    return t, vides
-
 
 # ─── Géocodage mis en cache ──────────────────────────────────────────────────
 # Construit points_all (tous les lieux, charg + déch) et arcs_all (toutes les
@@ -522,7 +395,6 @@ def _read_pydeck_sel(event, key):
     return None
 
 # ─── Fragment : panneau pays + carte (rerun partiel) ─────────────────────────
-@st.fragment
 def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
                       show_mode, show_arcs, focus_norm_ext, legs, MAX_GEO):
     from collections import defaultdict
@@ -727,7 +599,7 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
         flag_s = ""
         rows_sel = pays_rows[sel_pays]
         detail_records = []
-        for row in rows_sel:
+        for row in rows_sel.to_dict("records"):
             dos = row["dossier"]
             lg  = legs.get(dos, {})
             detail_records.append({
@@ -801,7 +673,34 @@ if df.empty:
     st.session_state.pop("ap_fichier", None)
     st.stop()
 
-legs = build_dossier_legs(df)
+@st.cache_data(show_spinner="Préparation du planning…", max_entries=3)
+def _preparer(cle, _df):
+    """Une fois par fichier : lieux localisés, table des dossiers, liaisons de la carte."""
+    u = _df.drop_duplicates("lieu_cle")
+    coords = {k: geocode_cached(l, c, p) for k, l, c, p in zip(u["lieu_cle"], u["localite"], u["cp"], u["pays"])}
+    t, autres = PL.table_dossiers(_df, coords)
+    legs = {str(dos): {"c_loc": r.clocalite, "c_cp": r.ccp, "c_pays": r.cpays, "c_cle": r.clieu_cle,
+                       "d_loc": r.dlocalite, "d_cp": r.dcp, "d_pays": r.dpays, "d_cle": r.dlieu_cle}
+            for dos, r in zip(t.index, t.itertuples())}
+    return coords, t, autres, legs
+
+
+@st.cache_data(show_spinner=False, max_entries=32)
+def _vue(cle, filtres, dim, t0, t1, couverture, _t, _autres, _act, _coords):
+    """Une fois par période / filtre : frise, ressources, indicateurs."""
+    return PL.vue(_t, _autres, _act, dim, t0, t1, _coords, couverture=couverture)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _excel(cle, _table):
+    buf = io.BytesIO()
+    _table.to_excel(buf, index=False, engine="openpyxl")
+    return buf.getvalue()
+
+
+import hashlib as _hashlib  # noqa: E402
+CLE = _hashlib.md5(st.session_state["ap_fichier"][1]).hexdigest()
+COORDS, T_ALL, AUTRES, legs = _preparer(CLE, df)
 _dd = df["date"].dropna()
 dmin, dmax = _dd.min().date(), _dd.max().date()
 
@@ -890,23 +789,25 @@ if sel:
     df_scope = df_scope[df_scope[dim_col].isin(sel)]
 
 dfx = df_scope[(df_scope["_dt"] >= t0) & (df_scope["_dt"] < t1)]
+T = T_ALL
+if flotte == "Flotte CB":
+    T = T[~T["is_tra"]]
+elif flotte == "Tractionnaires":
+    T = T[T["is_tra"]]
+if metier != "Tous":
+    T = T[T["type_tr"].str.upper().str.contains({"Plateau": "PLA", "Citerne": "CIT"}[metier], na=False)]
+if sel:
+    T = T[T[dim_col].isin(sel)]
+V = _vue(CLE, (flotte, metier, tuple(sel)), dimension, t0, t1, (dmin, dmax), T, AUTRES, df_scope, COORDS)
+synthese = V["synthese"]
 
 # ─── Indicateurs ─────────────────────────────────────────────────────────────
-coords = coords_lieux(df_scope[(df_scope["_dt"] >= t0 - pd.Timedelta(days=3)) & (df_scope["_dt"] < t1 + pd.Timedelta(days=3))])
-# jours sans activité comptés seulement dans les dates couvertes par l'export
-_b0, _b1 = max(t0, pd.Timestamp(dmin)), min(t1 - pd.Timedelta(seconds=1), pd.Timestamp(dmax))
-synthese, _ = analyse_ressources(dfx, dim_col, _b0, _b1, coords) if _b0 <= _b1 else analyse_ressources(dfx, dim_col, None, None, coords)
-_, vides = analyse_ressources(
-    df_scope[(df_scope["_dt"] >= t0 - pd.Timedelta(days=3)) & (df_scope["_dt"] < t1 + pd.Timedelta(days=3))],
-    dim_col, None, None, coords)
-
 k = st.columns(4)
-k[0].metric("Dossiers sur la période", _nb(dfx["dossier"].nunique()))
-k[1].metric(f"{dimension}s actives" if dimension != "Chauffeur" else "Chauffeurs actifs",
-            _nb(dfx[dim_col].replace("", np.nan).nunique()))
+k[0].metric("Dossiers sur la période", _nb(len(V["dossiers_periode"])))
+k[1].metric(f"{dimension}s actives" if dimension != "Chauffeur" else "Chauffeurs actifs", _nb(V["n_lignes"]))
 if not synthese.empty and (t1 - t0).days > 1:
     k[2].metric("Jours ouvrés sans activité", _nb(synthese["Jours ouvrés sans activité"].sum()),
-                help="Total sur les lignes affichées (lundi → vendredi).")
+                help="Total sur les lignes affichées (lundi → vendredi, dans les dates de l’export).")
 else:
     k[2].metric("Activités", _nb(len(dfx)))
 kc, kv = (synthese["Km chargés estimés"].sum(), synthese["Km à vide estimés"].sum()) if not synthese.empty else (0, 0)
@@ -921,20 +822,23 @@ if dfx.empty:
 # ─── Onglets ─────────────────────────────────────────────────────────────────
 t_plan, t_carte, t_res, t_grp, t_tab = st.tabs(["Planning", "Carte", "Ressources", "Regroupements", "Tableau"])
 
-with t_plan:
-    jours, lignes, details = PL.construire(df_scope, dim_col, t0, t1, coords, vides, synthese, couverture=(dmin, dmax))
-    if len(lignes) >= PL.MAX_LIGNES:
+@st.fragment
+def _onglet_planning():
+    """Fragment : un clic sur la frise ne recalcule que cet onglet."""
+    ss = st.session_state
+    jours, lignes = V["jours"], V["lignes"]
+    if V["n_lignes"] > PL.MAX_LIGNES:
         st.caption(f"Les {PL.MAX_LIGNES} {dimension.lower()}s les plus actives sont affichées : "
                    "utilisez « Rechercher » pour en voir d’autres.")
     c_frise, c_fiche = st.columns([3.3, 1.1], gap="medium")
     with c_frise:
         retour = _FRISE(jours=jours, lignes=lignes, sel=ss.get("ap_sel"), titre_ressource=dimension,
-                        maintenant=PL.position_maintenant(t0, t1), key="ap_frise", default=None)
+                        maintenant=PL.position_maintenant(t0, t1), key=f"ap_frise_{CLE[:6]}", default=None)
     if isinstance(retour, dict) and retour.get("t") != ss.get("ap_frise_t"):
         ss["ap_frise_t"] = retour.get("t")
         ss["ap_sel"] = retour.get("dossier")
     with c_fiche:
-        det = details.get(str(ss.get("ap_sel") or ""))
+        det = PL.fiche(T_ALL, AUTRES, str(ss.get("ap_sel") or ""), COORDS)
         if not det:
             st.markdown('<div class="ap-vide">Cliquez une barre bleue du planning pour voir le dossier.</div>',
                         unsafe_allow_html=True)
@@ -968,7 +872,14 @@ with t_plan:
                     ss["tv_point"] = {"nom": det["dech"], "lat": det["dech_point"][0], "lon": det["dech_point"][1]}
                     st.switch_page(ui.page_ref("outils/trajets_vides_cit.py"))
 
-with t_carte:
+
+
+with t_plan:
+    _onglet_planning()
+
+@st.fragment
+def _onglet_carte():
+    """Fragment : filtres de carte, clic sur un point, panneau pays sans recharger la page."""
     m1, m2, m3 = st.columns([1.4, 1, 2], vertical_alignment="bottom")
     with m1:
         show_mode = st.segmented_control("Afficher", ["Les deux", "Chargements", "Déchargements"],
@@ -1003,11 +914,13 @@ with t_carte:
         st.markdown('<div class="ap-vide">Aucun lieu localisé : vérifiez les colonnes pays, code postal et localité.</div>',
                     unsafe_allow_html=True)
     else:
-        from collections import defaultdict
-        pays_rows = defaultdict(list)
-        for _, row in dfx.iterrows():
-            pays_rows[row.get("pays_logi", row.get("pays", "??"))].append(row)
+        pays_rows = {kk: g for kk, g in dfx.groupby("pays_logi")}
         render_pays_carte(points_all, arcs_all, len(agg), pays_rows, show_mode, show_arcs, focus_norm_ext, legs, MAX_GEO)
+
+
+
+with t_carte:
+    _onglet_carte()
 
 with t_res:
     if synthese.empty:
@@ -1070,8 +983,7 @@ with t_tab:
     tb1, tb2 = st.columns([4, 1], vertical_alignment="center")
     tb1.caption(f"{_nb(len(table))} activités · {_nb(table['N° Dossier'].nunique())} dossiers · "
                 f"{PL.libelle_periode(t0, t1)}")
-    buf = io.BytesIO()
-    table.to_excel(buf, index=False, engine="openpyxl")
-    tb2.download_button("Exporter Excel", data=buf.getvalue(), file_name=f"planning_{t0:%Y%m%d}.xlsx",
+    tb2.download_button("Exporter Excel", data=_excel((CLE, flotte, metier, tuple(sel), str(t0), str(t1)), table),
+                        file_name=f"planning_{t0:%Y%m%d}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
     st.dataframe(table, hide_index=True, width="stretch", height=min(640, 40 + 36 * len(table)))
