@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Planning</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  :root { --txt:#1d1d1f; --sub:#6e6e73; --hair:#e5e5ea; --soft:#f0f0f3; --bleu:#0071e3; --bleu-f:#0058b0;
+          --lav:#30a2c8; --orange:#b25000; --vert:#248a3d; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+               color: var(--txt); -webkit-font-smoothing: antialiased; }
+  .carte { background: #fff; border-radius: 18px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 0 0 .5px rgba(0,0,0,.06);
+           overflow: hidden; }
+  .defil { overflow-x: auto; }
+  .grille { min-width: 860px; }
+  .ligne { display: grid; grid-template-columns: 180px minmax(0, 1fr); border-bottom: 1px solid #f5f5f7; }
+  .ligne:last-child { border-bottom: 0; }
+  .tete { border-bottom: 1px solid var(--hair); position: sticky; top: 0; background: #fff; z-index: 3; }
+  .tete .nom { font-size: 12px; font-weight: 600; color: var(--sub); padding: 12px 18px; }
+  .jours { display: grid; }
+  .jour { padding: 12px 10px; font-size: 12px; font-weight: 600; border-left: 1px solid var(--soft); white-space: nowrap;
+          overflow: hidden; text-overflow: ellipsis; }
+  .jour.we { color: var(--sub); background: #fafafc; }
+  .jour.auj { color: var(--bleu); }
+  .res { padding: 10px 18px; min-width: 0; }
+  .res .n { font-size: 14px; font-weight: 600; display: flex; gap: 6px; align-items: center; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis; }
+  .res .s { font-size: 11px; color: var(--sub); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tra { font-size: 10px; font-weight: 600; color: var(--orange); background: #fff3e5; padding: 1px 6px; border-radius: 980px; }
+  .piste { position: relative; height: 52px; }
+  .fond { position: absolute; inset: 0; display: grid; pointer-events: none; }
+  .fond div { border-left: 1px solid var(--soft); }
+  .fond div.we { background: #fafafc; }
+  .seg { position: absolute; top: 10px; height: 32px; border-radius: 9px; border: 0; padding: 0 9px; margin: 0;
+         font: 600 11.5px/32px -apple-system, BlinkMacSystemFont, "Inter", sans-serif; text-align: left;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .seg.c { background: var(--bleu); color: #fff; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease, background .12s; }
+  .seg.c:hover { background: var(--bleu-f); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,113,227,.28); z-index: 2; }
+  .seg.c.sel { background: var(--bleu-f); box-shadow: 0 0 0 3px rgba(0,113,227,.28); z-index: 2; }
+  .seg.c:focus-visible { outline: 2px solid #1d1d1f; outline-offset: 2px; }
+  .seg.v { background: transparent; border: 1.5px dashed #b0b0b6; color: var(--sub); font-weight: 500; top: 15px;
+           height: 22px; line-height: 19px; font-size: 10.5px; text-align: center; }
+  .seg.l { background: var(--lav); color: #fff; top: 13px; height: 26px; line-height: 26px; font-size: 10.5px; padding: 0 6px; }
+  .seg.a { background: #d1d1d6; color: #3a3a3c; top: 13px; height: 26px; line-height: 26px; font-size: 10.5px; padding: 0 6px; }
+  .seg.o { top: 6px; height: 40px; line-height: 40px; color: var(--orange); font-weight: 500; text-align: center;
+           background: repeating-linear-gradient(45deg, #f6e3c7 0 6px, #fff6ea 6px 12px); }
+  .maint { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff3b30; opacity: .7; z-index: 4; pointer-events: none; }
+  .vide-msg { padding: 40px 18px; text-align: center; color: var(--sub); font-size: 14px; }
+  .legende { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 18px 14px; font-size: 11.5px; color: var(--sub);
+             border-top: 1px solid var(--hair); }
+  .legende i { display: inline-block; width: 18px; height: 9px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+  .tip { position: fixed; pointer-events: none; z-index: 10; background: #1d1d1f; color: #fff; font-size: 12px; line-height: 1.45;
+         padding: 8px 10px; border-radius: 10px; max-width: 300px; box-shadow: 0 6px 20px rgba(0,0,0,.18); opacity: 0;
+         transition: opacity .1s; white-space: pre-line; }
+</style>
+</head>
+<body>
+<div class="carte"><div class="defil"><div class="grille" id="grille"></div></div>
+  <div class="legende">
+    <span><i style="background:#0071e3"></i>en charge · cliquer pour le détail</span>
+    <span><i style="border:1.5px dashed #b0b0b6;height:8px"></i>à vide (estimé)</span>
+    <span><i style="background:#30a2c8"></i>lavage</span>
+    <span><i style="background:#d1d1d6"></i>autre activité</span>
+    <span><i style="background:repeating-linear-gradient(45deg,#f6e3c7 0 4px,#fff6ea 4px 8px)"></i>jour ouvré sans activité</span>
+  </div>
+</div>
+<div class="tip" id="tip"></div>
+<script>
+  // Protocole des composants Streamlit (sans bibliothèque) : prêt → rendu → valeur / hauteur
+  function envoyer(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), "*");
+  }
+  var tip = document.getElementById("tip");
+  var hauteurEnvoyee = 0;
+  function ajusterHauteur() {
+    var h = Math.ceil(document.body.scrollHeight) + 2;
+    if (Math.abs(h - hauteurEnvoyee) > 1) { hauteurEnvoyee = h; envoyer("streamlit:setFrameHeight", { height: h }); }
+  }
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt !== undefined && txt !== null) e.textContent = txt;
+    return e;
+  }
+  function pos(e, a, b) {
+    e.style.left = "calc(" + (a * 100) + "% + 2px)";
+    e.style.width = "calc(" + (Math.max(b - a, 0.002) * 100) + "% - 4px)";
+  }
+  function rendre(args) {
+    var g = document.getElementById("grille");
+    g.textContent = "";
+    var jours = args.jours || [], lignes = args.lignes || [];
+    var cols = "repeat(" + Math.max(jours.length, 1) + ", minmax(0, 1fr))";
+    var tete = el("div", "ligne tete");
+    tete.appendChild(el("div", "nom", args.titre_ressource || "Ressource"));
+    var js = el("div", "jours"); js.style.gridTemplateColumns = cols;
+    jours.forEach(function (j) { js.appendChild(el("div", "jour" + (j.we ? " we" : "") + (j.auj ? " auj" : ""), j.label)); });
+    tete.appendChild(js);
+    g.appendChild(tete);
+    if (!lignes.length) { g.appendChild(el("div", "vide-msg", "Aucune activité sur cette période.")); ajusterHauteur(); return; }
+    lignes.forEach(function (l) {
+      var row = el("div", "ligne");
+      var r = el("div", "res");
+      var n = el("div", "n", l.nom);
+      if (l.tra) n.appendChild(el("span", "tra", "TRA"));
+      r.appendChild(n);
+      r.appendChild(el("div", "s", l.sous || ""));
+      row.appendChild(r);
+      var p = el("div", "piste");
+      var f = el("div", "fond"); f.style.gridTemplateColumns = cols;
+      jours.forEach(function (j) { f.appendChild(el("div", j.we ? "we" : "")); });
+      p.appendChild(f);
+      (l.segs || []).forEach(function (s) {
+        var b = el(s.k === "c" ? "button" : "div", "seg " + s.k + (s.id && s.id === args.sel ? " sel" : ""), s.label);
+        pos(b, s.a, s.b);
+        b.addEventListener("mouseenter", function () { tip.textContent = s.titre || s.label; tip.style.opacity = 1; });
+        b.addEventListener("mousemove", function (ev) {
+          var x = Math.min(ev.clientX + 14, window.innerWidth - 310);
+          tip.style.left = x + "px"; tip.style.top = (ev.clientY + 16) + "px";
+        });
+        b.addEventListener("mouseleave", function () { tip.style.opacity = 0; });
+        if (s.k === "c") {
+          b.type = "button";
+          b.setAttribute("aria-label", s.titre || s.label);
+          b.addEventListener("click", function () {
+            document.querySelectorAll(".seg.c.sel").forEach(function (x) { x.classList.remove("sel"); });
+            b.classList.add("sel");
+            envoyer("streamlit:setComponentValue", { value: { dossier: s.id, t: Date.now() }, dataType: "json" });
+          });
+        }
+        p.appendChild(b);
+      });
+      if (args.maintenant !== null && args.maintenant !== undefined && args.maintenant >= 0 && args.maintenant <= 1) {
+        var m = el("div", "maint"); m.style.left = (args.maintenant * 100) + "%"; p.appendChild(m);
+      }
+      row.appendChild(p);
+      g.appendChild(row);
+    });
+    ajusterHauteur();
+  }
+  window.addEventListener("message", function (ev) {
+    var d = ev.data || {};
+    if (d.type === "streamlit:render") { rendre(d.args || {}); }
+  });
+  window.addEventListener("resize", ajusterHauteur);
+  envoyer("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

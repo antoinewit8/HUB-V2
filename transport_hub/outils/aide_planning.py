@@ -21,126 +21,71 @@ ui.page_config("Aide planning")
 
 st.markdown("""
 <style>
-:root{
-  --bg:#f5f5f7; --panel:#ffffff; --panel2:#fafafc;
-  --line:#e5e5ea; --line2:#efeff4;
-  --txt:#1d1d1f; --muted:#6e6e73; --faint:#8e8e93;
-  --charg:#248a3d; --charg-d:#eaf6ec; --charg-l:#bfe3c7;
-  --dech:#0071e3;  --dech-d:#e8f1fc;  --dech-l:#b9d4f5;
-  --tra:#b25000;   --tra-d:#fff3e5;   --tra-l:#ffd3a3;
-  --alert:#d70015; --alert-d:#fdecee; --alert-l:#f5b8bf;
-}
-.hero{
-  background:var(--panel); border:1px solid var(--line);
-  border-radius:18px; padding:1.4rem 1.8rem; margin-bottom:1.2rem;
-  display:flex; align-items:flex-end; justify-content:space-between; gap:1rem;
-}
-.hero h1{ color:var(--txt);
-  font-size:2.05rem; font-weight:700; margin:0; letter-spacing:0; line-height:1;
-}
-.hero p{ color:var(--muted); font-size:.88rem; margin:.4rem 0 0; }
-.badge{
-  display:inline-block; font-weight:600;
-  font-size:.68rem; letter-spacing:0;
-  padding:3px 11px; border-radius:980px; white-space:nowrap;
-}
-.dayhead{ color:var(--txt);
-  font-size:1.3rem; font-weight:700; letter-spacing:0;
-  margin:1.1rem 0 .5rem; padding-bottom:.3rem; border-bottom:1px solid var(--line);
-  display:flex; align-items:baseline; gap:.7rem;
-}
-.dayhead .cnt{ font-size:.72rem; color:var(--muted); letter-spacing:0; font-weight:500; }
-.coltag{ font-size:.7rem; font-weight:700; letter-spacing:0; margin:.2rem 0 .55rem; }
-.coltag.c{ color:var(--charg); } .coltag.d{ color:var(--dech); }
-.card{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:.7rem .85rem; margin-bottom:.55rem; display:grid; grid-template-columns:auto 1fr; gap:.7rem; align-items:start; }
-.card.c{ border-color:var(--charg-l); } .card.d{ border-color:var(--dech-l); }
-.card .hour{ font-size:1.25rem; font-weight:700; line-height:1; padding-top:1px; min-width:3.1rem; }
-.card.c .hour{ color:var(--charg); } .card.d .hour{ color:var(--dech); }
-.card .hour .dno{ display:block; font-size:.6rem; font-weight:500; color:var(--faint); letter-spacing:0; margin-top:3px; }
-.card .loc{ font-size:1.08rem; font-weight:600; color:var(--txt); letter-spacing:0; line-height:1.05; }
-.card .site{ font-size:.78rem; color:var(--muted); margin-top:1px; }
-.card .leg{ font-size:.73rem; color:var(--faint); margin-top:3px; }
-.card .leg b{ color:var(--muted); font-weight:600; }
-.tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top:.5rem; }
-.tag{ font-size:.68rem; font-weight:600; letter-spacing:0; padding:1px 6px; border-radius:980px; border:1px solid var(--line); color:var(--muted); background:var(--panel2); }
-.tag.tra{ color:var(--tra); border-color:var(--tra-l); background:var(--tra-d); }
-.tag.cb{ color:var(--charg); border-color:var(--charg-l); background:var(--charg-d); }
-.tag.prod{ color:var(--txt); }
-.lane{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:.65rem .85rem; margin-bottom:.55rem; }
-.lane .who{ font-size:1.05rem; font-weight:700; color:var(--txt); letter-spacing:0; display:flex; gap:.6rem; align-items:center; }
-.lane .who .meta{ font-size:.68rem; color:var(--faint); font-weight:500; letter-spacing:0; text-transform:none; }
-.flow{ display:flex; flex-wrap:wrap; gap:6px; margin-top:.5rem; }
-.stop{ font-size:.72rem; font-weight:600; padding:3px 9px; border-radius:980px; border:1px solid; letter-spacing:0; white-space:nowrap; }
-.stop.c{ color:var(--charg); border-color:var(--charg-l); background:var(--charg-d); }
-.stop.d{ color:var(--dech); border-color:var(--dech-l); background:var(--dech-d); }
-.stop .t{ opacity:.7; font-weight:500; margin-right:5px; }
-.stop.v{ color:var(--muted); border-color:var(--line); border-style:dashed; background:transparent; font-weight:500; }
-.stop.o{ color:var(--faint); border-color:var(--line2); background:var(--panel2); font-weight:500; }
-.rows{ border:1px solid var(--line); border-radius:14px; overflow:hidden; margin-bottom:.5rem; }
-.row{ display:grid; grid-template-columns:108px minmax(0,1.5fr) 16px minmax(0,1.5fr) minmax(0,1.4fr); gap:.45rem .75rem; align-items:center; padding:.42rem .75rem; border-bottom:1px solid var(--line2); }
-.row:last-child{ border-bottom:none; }
-.row:nth-child(odd){ background:var(--panel2); }
-.row .c1{ display:flex; flex-direction:column; gap:3px; align-items:flex-start; }
-.row .c1 .dos{ font-weight:600; font-size:.7rem; letter-spacing:0; color:var(--faint); }
-.leg2{ display:grid; grid-template-columns:auto auto minmax(0,1fr); gap:.4rem; align-items:baseline; min-width:0; }
-.leg2 .lh{ font-weight:700; font-size:.9rem; white-space:nowrap; letter-spacing:0; }
-.leg2.c .lh{ color:var(--charg); } .leg2.d .lh{ color:var(--dech); }
-.leg2 .ll{ font-weight:600; font-size:.9rem; color:var(--txt); letter-spacing:0; white-space:nowrap; }
-.leg2 .ls{ font-size:.72rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
-.leg2.off{ display:block; grid-template-columns:none; color:var(--faint); font-size:.74rem; font-style:italic; }
-.rarrow{ color:var(--faint); font-size:.85rem; text-align:center; }
-.row .res{ display:flex; flex-wrap:wrap; gap:3px; }
-.dens-compact .row{ padding:.28rem .65rem; }
-.dens-compact .leg2 .lh, .dens-compact .leg2 .ll{ font-size:.82rem; }
-.dens-compact .leg2 .ls{ font-size:.68rem; }
-.dens-large .row{ padding:.62rem .85rem; gap:.5rem .9rem; }
-.dens-large .leg2 .lh, .dens-large .leg2 .ll{ font-size:1.02rem; }
-.dens-large .leg2 .ls{ font-size:.78rem; }
-@media(max-width:820px){ .row{ grid-template-columns:1fr; gap:.18rem; } .rarrow{ display:none; } }
-.trips{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:.5rem; margin-bottom:.5rem; }
-.trip{ background:var(--panel2); border:1px solid var(--line2); border-radius:14px; padding:.5rem .65rem .55rem; }
-.trip-h{ display:flex; justify-content:space-between; align-items:center; gap:.4rem; margin-bottom:.3rem; flex-wrap:wrap; }
-.trip-h .dos{ font-weight:600; font-size:.72rem; letter-spacing:0; color:var(--faint); }
-.trip-tags{ display:flex; flex-wrap:wrap; gap:3px; }
-.leg{ display:grid; grid-template-columns:auto 1fr; column-gap:.65rem; align-items:baseline; padding:.08rem 0; }
-.leg .lh{ font-weight:700; font-size:.9rem; line-height:1.25; white-space:nowrap; letter-spacing:0; }
-.leg.c .lh{ color:var(--charg); } .leg.d .lh{ color:var(--dech); }
-.leg .ll{ grid-column:2; font-weight:600; font-size:.95rem; color:var(--txt); letter-spacing:0; line-height:1.25; }
-.leg .ls{ grid-column:2; font-size:.72rem; color:var(--muted); line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.leg.off{ display:block; grid-template-columns:none; font-size:.72rem; font-style:italic; color:var(--faint); padding:.12rem 0; }
-.arrow{ color:var(--faint); font-size:.78rem; line-height:1; margin:.1rem 0 .15rem .15rem; }
-.cluster{ background:var(--alert-d); border:1px solid var(--alert-l); border-radius:14px; padding:.7rem .95rem; margin-bottom:.5rem; }
-.cluster .ch{ font-weight:700; font-size:1rem; color:#d70015; letter-spacing:0; }
-.cluster .cs{ font-size:.76rem; color:#6e6e73; margin-top:3px; }
-.cluster.d{ background:var(--dech-d); border-color:var(--dech-l); }
-.cluster.d .ch{ color:#0060c0; } .cluster.d .cs{ color:#6e6e73; }
-.legendline{ color:var(--faint); font-size:.74rem; margin-top:.4rem; }
-.legendline b.c{ color:var(--charg); } .legendline b.d{ color:var(--dech); } .legendline b.x{ color:var(--alert); }
-/* ── Boutons pays : nouveau visuel ── */
-.pp-card-btn {
-    background: #ffffff;
-    border: 1.5px solid #e5e5ea;
-    border-radius: 18px;
-    padding: 1rem 1.1rem .85rem;
-    transition: border-color .15s, background .15s;
-    display: flex;
-    flex-direction: column;
-    gap: .15rem;
-    min-height: 88px;
-    margin-bottom: 0;
-}
-.pp-card-btn:hover { border-color: #c7c7cc; background: #f5f5f7; }
-.pp-row-top { display: flex; align-items: baseline; gap: .5rem; }
-.pp-flag { font-size: 1.6rem; line-height: 1; }
-.pp-code {
-    font-size: 1.5rem; font-weight: 700;
-    color: #1d1d1f; letter-spacing:0; line-height: 1;
-}
-.pp-detail-line {
-    font-size: .75rem; font-weight: 600; color: #6e6e73;
-    letter-spacing:0; line-height: 1.4;
-    margin-top: .3rem; border-top: 1px solid #f5f5f7; padding-top: .3rem;
-}
+/* Page large : la frise a besoin de place (plus spécifique que la règle du hub à 1 100 px) */
+[data-testid="stMain"] [data-testid="stMainBlockContainer"] { max-width: 1360px !important; }
+
+/* Bandeau fichier */
+.ap-fichier { display:inline-flex; align-items:center; gap:10px; background:#fff; border-radius:980px; padding:7px 14px 7px 10px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.08); font-size:13px; color:#1d1d1f; }
+.ap-fichier i { width:22px; height:22px; border-radius:6px; background:#ff9500; display:inline-flex; align-items:center;
+  justify-content:center; color:#fff; font-style:normal; font-size:11px; font-weight:700; }
+.ap-fichier span { color:#6e6e73; }
+
+/* Barre de filtres : une carte, des pastilles */
+.st-key-ap_barre { background:#fff; border-radius:18px; padding:14px 18px 6px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06);
+  margin-bottom:.4rem; }
+.st-key-ap_barre label p { font-size:12px !important; font-weight:600 !important; color:#6e6e73 !important; }
+[data-testid="stMain"] [role="radiogroup"] { background:#f0f0f3; border-radius:980px; padding:3px; gap:2px; width:fit-content;
+  flex-wrap:nowrap; }
+[data-testid="stMain"] button[data-variant="segmented_control"] { border:0 !important; border-radius:980px !important;
+  background:transparent !important; min-height:32px; padding:0 13px !important; box-shadow:none !important; white-space:nowrap; }
+[data-testid="stMain"] button[data-variant="segmented_control"] p { color:#6e6e73 !important; font-weight:500 !important; font-size:13px !important; }
+[data-testid="stMain"] button[data-variant="segmented_control"]:hover p { color:#1d1d1f !important; }
+[data-testid="stMain"] button[data-variant="segmented_control"][aria-checked="true"] { background:#fff !important;
+  box-shadow:0 1px 3px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.04) !important; }
+[data-testid="stMain"] button[data-variant="segmented_control"][aria-checked="true"] p { color:#1d1d1f !important; font-weight:600 !important; }
+.st-key-ap_barre .stButton button { min-height:38px !important; width:38px; padding:0 !important; }
+.st-key-ap_barre .stButton button p { font-size:18px !important; line-height:1; }
+.ap-periode { font-size:17px; font-weight:600; letter-spacing:-0.01em; color:#1d1d1f; padding-bottom:8px; white-space:nowrap; }
+
+/* Onglets : soulignement orange (couleur de la catégorie Planning) */
+[data-testid="stTabs"] [role="tablist"] { gap:6px; border-bottom:1px solid #e5e5ea; }
+[data-testid="stTab"] { padding:10px 14px !important; }
+[data-testid="stTab"] p { font-size:15px !important; font-weight:500 !important; color:#6e6e73 !important; }
+[data-testid="stTab"][aria-selected="true"] p { color:#1d1d1f !important; font-weight:600 !important; }
+[data-testid="stTab"][aria-selected="true"] > div:last-child:empty { background:#ff9500 !important; }
+[data-testid="stTab"]:hover p { color:#1d1d1f !important; }
+
+/* Fiche dossier */
+.ap-fiche { background:#fff; border-radius:18px; padding:18px 20px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06); }
+.ap-fiche .eye { font-size:12px; color:#6e6e73; margin:0; }
+.ap-fiche h3 { font-size:20px !important; font-weight:600; letter-spacing:-0.015em; margin:4px 0 14px !important; padding:0 !important;
+  line-height:1.25; }
+.ap-fiche .etape { display:grid; grid-template-columns:12px minmax(0,1fr); gap:10px; margin-bottom:12px; }
+.ap-fiche .pt { width:10px; height:10px; border-radius:50%; margin-top:5px; }
+.ap-fiche .q { font-size:12px; color:#6e6e73; }
+.ap-fiche .l { font-size:15px; font-weight:600; }
+.ap-fiche .s { font-size:12px; color:#6e6e73; }
+.ap-fiche .tags { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 2px; }
+.ap-fiche .tags span { font-size:12px; background:#f0f0f3; color:#1d1d1f; padding:4px 10px; border-radius:980px; }
+.ap-fiche .tags span.tra { background:#fff3e5; color:#b25000; }
+.ap-vide { background:#fff; border-radius:18px; padding:28px 20px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06);
+  color:#6e6e73; font-size:14px; text-align:center; }
+
+/* Regroupements */
+.ap-groupes { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:12px; }
+.ap-groupe { background:#fff; border-radius:18px; padding:16px 18px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06); }
+.ap-groupe .t { display:inline-block; font-size:11px; font-weight:600; padding:3px 9px; border-radius:980px; }
+.ap-groupe .t.c { background:#e8f6ec; color:#1e7a34; } .ap-groupe .t.d { background:#e8f1fc; color:#0060c0; }
+.ap-groupe .n { font-size:18px; font-weight:600; margin-top:8px; letter-spacing:-0.01em; }
+.ap-groupe .z { font-size:13px; color:#6e6e73; margin-top:3px; }
+
+/* Panneau pays de la carte */
+.pp-card-btn { background:#fff; border-radius:16px; padding:.85rem 1rem .75rem; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.08);
+  display:flex; flex-direction:column; gap:.15rem; margin-top:.4rem; }
+.pp-row-top { display:flex; align-items:baseline; gap:.5rem; }
+.pp-code { font-size:1.15rem; font-weight:700; color:#1d1d1f; line-height:1; }
+.pp-detail-line { font-size:.75rem; font-weight:500; color:#6e6e73; line-height:1.4; margin-top:.3rem; border-top:1px solid #f0f0f3; padding-top:.3rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -606,20 +551,20 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
     with col_panel:
         st.markdown(
             f'<div style="font-size:13px;font-weight:600;color:#6e6e73;margin-bottom:.5rem;">'
-            f'Camions · {title_mode}</div>',
+            f'Dossiers par pays · {title_mode}</div>',
             unsafe_allow_html=True)
 
         pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
         for pays_code in pays_order:
             total     = pays_total[pays_code]
-            flag      = PAYS_FLAGS.get(pays_code, "🏳️")
+            flag      = ""
             details   = pays_detail.get(pays_code, [])
             is_active = st.session_state["pp_selected_pays"] == pays_code
 
             detail_html = ""
             if details:
                 parts = [f"+{n} {loc}" for loc, n in details[:4]]
-                detail_html = '<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
+                detail_html = '<div class="pp-detail-line">dont ' + "  ·  ".join(parts) + '</div>'
 
             active_style = (
                 f"border-color:{val_color};background:#f2faf4;"
@@ -629,7 +574,6 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
             st.markdown(f"""
 <div class="pp-card-btn" style="{active_style};margin-bottom:0;">
   <div class="pp-row-top">
-    <span class="pp-flag">{flag}</span>
     <span class="pp-code">{pays_code}</span>
     <span style="font-size:2.2rem;font-weight:600;letter-spacing:-0.02em;color:{val_color};line-height:1;margin-left:auto;">{total}</span>
   </div>
@@ -645,7 +589,7 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
                 st.rerun(scope="fragment")
 
         if focus_norm:
-            if st.button("↩ Vue d'ensemble", key="pp_reset_focus",
+            if st.button("Vue d'ensemble", key="pp_reset_focus", icon=":material/undo:",
                          width="stretch", type="primary"):
                 st.session_state["pp_focus_raw"] = None
                 st.rerun(scope="fragment")
@@ -696,10 +640,10 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
                 p["color"]  = p["color"][:3] + [255]
         foc_name = next((p["nom"] for p in points_map if p["loc_norm"] == focus_norm), focus_norm)
         st.info(f"**{foc_name}** isolé — {len(arcs_map)} liaison(s). "
-                f"Recliquez le point (ou le fond de carte / « ↩ Vue d'ensemble ») pour revenir.")
+                f"Recliquez le point (ou « Vue d'ensemble ») pour revenir.")
         foc = next((p for p in points_map if p["loc_norm"] == focus_norm), None)
         if foc is not None and any(p["loc_norm"] == focus_norm and p["type_code"] == "D" for p in points_all):
-            if st.button(f"Où recharger après {foc_name} ?", key="pp_vers_tv", icon=":material/swap_horiz:"):
+            if st.button(f"Où recharger après {foc_name} ?", key="pp_vers_tv", icon=":material/swap_horiz:", type="primary"):
                 st.session_state["tv_point"] = {"nom": foc_name, "lat": foc["lat"], "lon": foc["lon"]}
                 st.switch_page(ui.page_ref("outils/trajets_vides_cit.py"))
     else:
@@ -754,7 +698,7 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
                     initial_view_state=pdk.ViewState(
                         latitude=dfp["lat"].mean(),
                         longitude=dfp["lon"].mean(),
-                        zoom=zoom_level, pitch=25),
+                        zoom=zoom_level, pitch=0),
                     tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> dossier(s)<br>"
                                      "<span style='color:#6e6e73'>Dossiers : {dossiers}</span>",
                              "style": {"background":"#ffffff","color":"#1d1d1f","border-radius":"10px",
@@ -766,7 +710,7 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
                 # persiste : recliquer le point sélectionné le désélectionne.
                 map_key = f"planmap_{sel_pays or 'all'}"
                 try:
-                    event = st.pydeck_chart(deck, use_container_width=True, height=680,
+                    event = st.pydeck_chart(deck, use_container_width=True, height=620,
                                             key=map_key, selection_mode="single-object",
                                             on_select="rerun")
                     new_sel = _read_pydeck_sel(event, map_key)
@@ -775,14 +719,12 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
                         st.rerun(scope="fragment")
                 except TypeError:
                     st.pydeck_chart(deck, use_container_width=True, height=680)
-                if n_agg >= MAX_GEO and not focus_norm:
-                    st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
             except ImportError:
                 st.map(pd.DataFrame(points_map).rename(columns={"lat":"latitude","lon":"longitude"}))
 
     # ── Détail pays pleine largeur ─────────────────────────────────────────
     if sel_pays and sel_pays in pays_rows:
-        flag_s = PAYS_FLAGS.get(sel_pays, "🏳️")
+        flag_s = ""
         rows_sel = pays_rows[sel_pays]
         detail_records = []
         for row in rows_sel:
@@ -812,404 +754,324 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
         st.dataframe(df_detail, hide_index=True, width="stretch",
                      height=min(420, 38 + len(df_detail) * 36))
 
-# ─── Header ──────────────────────────────────────────────────────────────────
-ui.page("aide_planning", "Vue planeur : chargements et déchargements par chauffeur, tracteur ou remorque, "
-        "flotte CB et tractionnaires confondus.")
-_err_ptv = ptv.erreur_chargement()
-st.markdown('<div class="ap-statut"><i></i>Lieux localisés par la table CP du hub (PTV en secours)</div>'
-            if not _err_ptv else '<div class="ap-statut off"><i></i>Module de localisation indisponible</div>',
-            unsafe_allow_html=True)
-if _err_ptv:
-    st.caption(f"Chargement : {_err_ptv}")
-st.write("")
+# ─── En-tête ─────────────────────────────────────────────────────────────────
+import datetime as _dtm  # noqa: E402
 
-up = st.file_uploader("Fichier des activités (LISTES_MISSIONS : chargements / déchargements)",
-                      type=["xlsx", "xls"], key="ap_up")
-if up is not None:
-    st.session_state["ap_fichier"] = (up.name, up.getvalue())
-elif "ap_fichier" in st.session_state:
-    # gardé en mémoire : on peut passer par Trajets vides et revenir sans recharger
-    st.caption(f"En mémoire : {st.session_state['ap_fichier'][0]}")
-    if st.button("Retirer le fichier", key="ap_rm"):
-        st.session_state.pop("ap_fichier", None)
-        st.rerun()
+from tools.aide_planning import planeur as PL  # noqa: E402
+from tools.aide_planning.composant import frise as _FRISE  # noqa: E402
+
+ui.page("aide_planning", "Le planning de la flotte d’un coup d’œil : qui charge, qui décharge, qui roule à vide, "
+        "et où il reste de la place.")
+
+_err_ptv = ptv.erreur_chargement()
+if _err_ptv:
+    st.caption(f"Localisation des lieux indisponible : {_err_ptv}")
+
+
+def _esc(v) -> str:
+    import html as _h
+    return _h.escape(str(v if v is not None else ""))
+
+
+def _nb(x) -> str:
+    return f"{x:,.0f}".replace(",", " ")
+
+
+# ─── Fichier ─────────────────────────────────────────────────────────────────
+def _uploader(cle):
+    f = st.file_uploader("Export des activités (LISTES_MISSIONS)", type=["xlsx", "xls"], key=cle,
+                         help="Une ligne par activité : chargement, déchargement, lavage, décrochage…")
+    if f is not None:
+        st.session_state["ap_fichier"] = (f.name, f.getvalue())
+        st.session_state.pop("ap_sel", None)
+        return True
+    return False
+
+
 if "ap_fichier" not in st.session_state:
-    st.info("Chargez l'export des activités pour démarrer.")
+    if _uploader("ap_up"):
+        st.rerun()
+    st.markdown('<div class="ap-vide">Chargez l’export des activités pour afficher le planning. '
+                'Il reste en mémoire si vous passez par un autre outil.</div>', unsafe_allow_html=True)
     st.stop()
 
 df, COLS, ACT_DISTINCT, DATE_ORDER = load_activites(st.session_state["ap_fichier"][1])
 if df.empty:
-    st.error("Aucune ligne exploitable (colonne « N° Dossier » introuvable ou vide).")
+    st.error("Aucune ligne exploitable : la colonne « N° Dossier » est introuvable ou vide.")
+    st.session_state.pop("ap_fichier", None)
     st.stop()
 
 legs = build_dossier_legs(df)
+_dd = df["date"].dropna()
+dmin, dmax = _dd.min().date(), _dd.max().date()
 
-with st.expander("Debug — colonnes détectées & valeurs Activité"):
-    st.write("**Colonnes mappées :**", {k: v for k, v in COLS.items()})
-    st.write("**Valeurs distinctes de « Activité » :**")
-    st.dataframe(ACT_DISTINCT.rename("Nb").reset_index().rename(columns={"index": "Activité"}),
+fb1, fb2, fb3 = st.columns([6, 1.2, 1.4], vertical_alignment="center")
+fb1.markdown(
+    f'<div class="ap-fichier"><i>XL</i><b>{_esc(st.session_state["ap_fichier"][0])}</b>'
+    f'<span>{dmin:%d/%m/%Y} → {dmax:%d/%m/%Y} · {_nb(df["dossier"].nunique())} dossiers · '
+    f'{_nb(len(df))} activités</span></div>', unsafe_allow_html=True)
+with fb2.popover("Changer", use_container_width=True):
+    if _uploader("ap_up2"):
+        st.rerun()
+    if st.button("Retirer le fichier", key="ap_rm"):
+        st.session_state.pop("ap_fichier", None)
+        st.rerun()
+with fb3.popover("Données lues", use_container_width=True):
+    st.markdown(f"**Colonnes reconnues** — format de date : {DATE_ORDER}")
+    st.dataframe(pd.DataFrame([{"Champ": k, "Colonne du fichier": v or "—"} for k, v in COLS.items()]),
                  hide_index=True, width="stretch")
-    n_unknown = int((df["type"] == "?").sum())
-    if n_unknown:
-        st.warning(f"{n_unknown} activité(s) sans libellé.")
     autres = df.loc[df["type"].eq("A"), "_act_raw"].value_counts()
     if len(autres):
-        st.write("**Activités comptées à part (ni chargement ni déchargement) :** "
-                 + ", ".join(f"{k} ({v})" for k, v in autres.items()))
-    _dd = df["date"].dropna()
-    if not _dd.empty:
-        st.write(f"**Format de date détecté :** `{DATE_ORDER}` — "
-                 f"du {_dd.min().strftime('%d/%m/%Y')} au {_dd.max().strftime('%d/%m/%Y')} "
-                 f"({_dd.dt.date.nunique()} jours).")
+        st.caption("Activités comptées à part (ni chargement ni déchargement) : "
+                   + ", ".join(f"{k} ({v})" for k, v in autres.items()))
+    n_unknown = int((df["type"] == "?").sum())
+    if n_unknown:
+        st.caption(f"{n_unknown} activité(s) sans libellé.")
 
-st.markdown('<div class="sect">Filtres planning <span class="hint">multiselect vide = tout confondu</span></div>',
-            unsafe_allow_html=True)
+# ─── Filtres ─────────────────────────────────────────────────────────────────
+ss = st.session_state
+ss.setdefault("ap_mode", "Semaine")
+if "ap_pivot" not in ss:
+    auj = _dtm.date.today()
+    ss["ap_pivot"] = auj if dmin <= auj <= dmax else dmax
 
-f1, f2, f3, f4 = st.columns([1.1, 1.1, .9, 1])
-with f1:
-    dimension = st.radio("Dimension", ["Chauffeur", "Tracteur (immat.)", "Remorque"], horizontal=True)
-    dim_col = {"Chauffeur": "chauffeur", "Tracteur (immat.)": "immat", "Remorque": "remorque"}[dimension]
-with f2:
-    flotte = st.radio("Périmètre", ["Tous", "Flotte CB", "Tractionnaires"], horizontal=True)
-with f3:
-    type_tr_f = st.radio("Type transport", ["Tous", "PLA", "CIT"], horizontal=True)
-with f4:
-    vue = st.radio("Vue", ["Par jour", "Par ressource"], horizontal=True)
 
-df_scope = df.copy()
+def _seg(label, options, cle, defaut):
+    v = st.segmented_control(label, options, key=cle, default=defaut)
+    return v if v is not None else defaut
+
+
+with st.container(key="ap_barre"):
+    r1 = st.columns([1.55, .95, .3, .3, 2.6], vertical_alignment="bottom")
+    with r1[0]:
+        mode = _seg("Période", ["Jour", "Semaine", "Mois", "Tout"], "ap_mode_w", ss["ap_mode"])
+        ss["ap_mode"] = mode
+    if mode == "Tout":
+        with r1[1]:
+            plage = st.date_input("Du … au", value=(dmin, dmax), min_value=dmin, max_value=dmax,
+                                  format="DD/MM/YYYY", key="ap_plage")
+        plage = plage if isinstance(plage, (list, tuple)) and len(plage) == 2 else (dmin, dmax)
+        t0, t1 = PL.fenetre("Tout", None, plage)
+    else:
+        with r1[1]:
+            piv = st.date_input("Date", value=ss["ap_pivot"], format="DD/MM/YYYY", key=f"ap_piv_{ss['ap_pivot']}")
+            if piv != ss["ap_pivot"]:
+                ss["ap_pivot"] = piv
+                st.rerun()
+        if r1[2].button("‹", key="ap_prec", help="Période précédente"):
+            ss["ap_pivot"] = PL.decaler(mode, ss["ap_pivot"], -1)
+            st.rerun()
+        if r1[3].button("›", key="ap_suiv", help="Période suivante"):
+            ss["ap_pivot"] = PL.decaler(mode, ss["ap_pivot"], 1)
+            st.rerun()
+        t0, t1 = PL.fenetre(mode, ss["ap_pivot"])
+    r1[4].markdown(f'<div class="ap-periode">{PL.libelle_periode(t0, t1)}</div>', unsafe_allow_html=True)
+
+    r2 = st.columns([1.3, 1.1, 1.3, 1.9], vertical_alignment="bottom")
+    with r2[0]:
+        flotte = _seg("Flotte", ["Tous", "Flotte CB", "Tractionnaires"], "ap_flotte", "Tous")
+    with r2[1]:
+        metier = _seg("Métier", ["Tous", "Plateau", "Citerne"], "ap_metier", "Tous")
+    with r2[2]:
+        dimension = _seg("Une ligne par", ["Remorque", "Tracteur", "Chauffeur"], "ap_dim", "Remorque")
+    dim_col = {"Chauffeur": "chauffeur", "Tracteur": "immat", "Remorque": "remorque"}[dimension]
+
+df_scope = df
 if flotte == "Flotte CB":
     df_scope = df_scope[~df_scope["is_tra"]]
 elif flotte == "Tractionnaires":
     df_scope = df_scope[df_scope["is_tra"]]
+if metier != "Tous":
+    df_scope = df_scope[df_scope["type_tr"].str.upper().str.contains({"Plateau": "PLA", "Citerne": "CIT"}[metier], na=False)]
 
-if type_tr_f != "Tous":
-    df_scope = df_scope[df_scope["type_tr"].str.upper().str.contains(type_tr_f, na=False)]
-
-options = sorted([v for v in df_scope[dim_col].dropna().unique() if str(v).strip()])
-g1, g2 = st.columns([2.2, 1])
-with g1:
-    sel = st.multiselect(f"{dimension} — laisser vide pour tout confondu", options)
-with g2:
-    dts = df_scope["date"].dropna()
-    if not dts.empty:
-        dmin, dmax = dts.min().date(), dts.max().date()
-        date_range = st.date_input("Période", value=(dmin, dmax),
-                                    min_value=dmin, max_value=dmax, format="DD/MM/YYYY")
-    else:
-        date_range = None
-
-dfx = df_scope.copy()
+options = sorted(v for v in df_scope[dim_col].dropna().unique() if str(v).strip())
+sel = r2[3].multiselect(f"Rechercher ({dimension.lower()})", options, placeholder="Toutes", key="ap_recherche")
 if sel:
-    dfx = dfx[dfx[dim_col].isin(sel)]
+    df_scope = df_scope[df_scope[dim_col].isin(sel)]
 
-def _range_bounds(dr):
-    if dr is None:
-        return None, None
-    if isinstance(dr, (list, tuple)):
-        if len(dr) == 0:
-            return None, None
-        if len(dr) == 1:
-            return dr[0], dr[0]
-        return dr[0], dr[1]
-    return dr, dr
+dfx = df_scope[(df_scope["_dt"] >= t0) & (df_scope["_dt"] < t1)]
 
-_lo, _hi = _range_bounds(date_range)
-if _lo is not None:
-    d0 = pd.Timestamp(_lo)
-    d1 = pd.Timestamp(_hi) + pd.Timedelta(days=1)
-    dfx = dfx[(dfx["date"] >= d0) & (dfx["date"] < d1)]
+# ─── Indicateurs ─────────────────────────────────────────────────────────────
+coords = coords_lieux(df_scope[(df_scope["_dt"] >= t0 - pd.Timedelta(days=3)) & (df_scope["_dt"] < t1 + pd.Timedelta(days=3))])
+# jours sans activité comptés seulement dans les dates couvertes par l'export
+_b0, _b1 = max(t0, pd.Timestamp(dmin)), min(t1 - pd.Timedelta(seconds=1), pd.Timestamp(dmax))
+synthese, _ = analyse_ressources(dfx, dim_col, _b0, _b1, coords) if _b0 <= _b1 else analyse_ressources(dfx, dim_col, None, None, coords)
+_, vides = analyse_ressources(
+    df_scope[(df_scope["_dt"] >= t0 - pd.Timedelta(days=3)) & (df_scope["_dt"] < t1 + pd.Timedelta(days=3))],
+    dim_col, None, None, coords)
+
+k = st.columns(4)
+k[0].metric("Dossiers sur la période", _nb(dfx["dossier"].nunique()))
+k[1].metric(f"{dimension}s actives" if dimension != "Chauffeur" else "Chauffeurs actifs",
+            _nb(dfx[dim_col].replace("", np.nan).nunique()))
+if not synthese.empty and (t1 - t0).days > 1:
+    k[2].metric("Jours ouvrés sans activité", _nb(synthese["Jours ouvrés sans activité"].sum()),
+                help="Total sur les lignes affichées (lundi → vendredi).")
+else:
+    k[2].metric("Activités", _nb(len(dfx)))
+kc, kv = (synthese["Km chargés estimés"].sum(), synthese["Km à vide estimés"].sum()) if not synthese.empty else (0, 0)
+k[3].metric("Part de km à vide", f"{kv / (kc + kv) * 100:.0f} %" if kc + kv else "—",
+            help="Estimée au vol d’oiseau × 1,3 : dernier déchargement → lavage / décrochage → chargement suivant.")
 
 if dfx.empty:
-    avail = sorted(df_scope["date"].dropna().dt.date.unique())
-    if avail:
-        lst = ", ".join(d.strftime("%d/%m/%Y") for d in avail[:15]) + (" …" if len(avail) > 15 else "")
-        st.warning(f"Aucune activité sur cette sélection. Dates disponibles : {lst}")
-    else:
-        st.warning("Aucune activité ne correspond à ces filtres.")
+    st.markdown(f'<div class="ap-vide">Aucune activité {PL.libelle_periode(t0, t1)} avec ces filtres. '
+                f'L’export couvre du {dmin:%d/%m/%Y} au {dmax:%d/%m/%Y}.</div>', unsafe_allow_html=True)
     st.stop()
 
-n_charg = int((dfx["type"] == "C").sum())
-n_dech  = int((dfx["type"] == "D").sum())
-n_tra   = int(dfx["is_tra"].sum())
+# ─── Onglets ─────────────────────────────────────────────────────────────────
+t_plan, t_carte, t_res, t_grp, t_tab = st.tabs(["Planning", "Carte", "Ressources", "Regroupements", "Tableau"])
 
-st.markdown('<div class="sect">Carte des activités '
-            '<span class="hint">clic sur un point = isole + montre ses liaisons · reclic = vue d\'ensemble</span></div>',
-            unsafe_allow_html=True)
+with t_plan:
+    jours, lignes, details = PL.construire(df_scope, dim_col, t0, t1, coords, vides, synthese, couverture=(dmin, dmax))
+    if len(lignes) >= PL.MAX_LIGNES:
+        st.caption(f"Les {PL.MAX_LIGNES} {dimension.lower()}s les plus actives sont affichées : "
+                   "utilisez « Rechercher » pour en voir d’autres.")
+    c_frise, c_fiche = st.columns([3.3, 1.1], gap="medium")
+    with c_frise:
+        retour = _FRISE(jours=jours, lignes=lignes, sel=ss.get("ap_sel"), titre_ressource=dimension,
+                        maintenant=PL.position_maintenant(t0, t1), key="ap_frise", default=None)
+    if isinstance(retour, dict) and retour.get("t") != ss.get("ap_frise_t"):
+        ss["ap_frise_t"] = retour.get("t")
+        ss["ap_sel"] = retour.get("dossier")
+    with c_fiche:
+        det = details.get(str(ss.get("ap_sel") or ""))
+        if not det:
+            st.markdown('<div class="ap-vide">Cliquez une barre bleue du planning pour voir le dossier.</div>',
+                        unsafe_allow_html=True)
+        else:
+            tags = "".join(f"<span>{_esc(x)}</span>" for x in (det["chauffeur"], det["tracteur"], det["produit"]) if x)
+            if det["km_charge"]:
+                tags += f"<span>~{_nb(det['km_charge'])} km chargés</span>"
+            if det["tra"]:
+                tags += '<span class="tra">Tractionnaire</span>'
+            etapes = ""
+            if det["charg"]:
+                etapes += (f'<div class="etape"><div class="pt" style="background:#248a3d"></div><div>'
+                           f'<div class="q">Chargement · {_esc(det["charg_quand"])}</div>'
+                           f'<div class="l">{_esc(det["charg"])} <span class="s">{_esc(det["charg_pays"])}</span></div>'
+                           f'<div class="s">{_esc(det["charg_site"])}</div></div></div>')
+            if det["dech"]:
+                etapes += (f'<div class="etape"><div class="pt" style="background:#0071e3"></div><div>'
+                           f'<div class="q">Déchargement · {_esc(det["dech_quand"])}</div>'
+                           f'<div class="l">{_esc(det["dech"])} <span class="s">{_esc(det["dech_pays"])}</span></div>'
+                           f'<div class="s">{_esc(det["dech_site"])}</div></div></div>')
+            autres = f'<div class="s" style="margin-bottom:6px">Ensuite : {_esc(det["autres"])}</div>' if det["autres"] else ""
+            multi = (f' · {det["nb_charg"]} chargements, {det["nb_dech"]} déchargements'
+                     if det["nb_charg"] > 1 or det["nb_dech"] > 1 else "")
+            st.markdown(
+                f'<div class="ap-fiche"><p class="eye">Dossier {_esc(det["dossier"])} · {_esc(det["remorque"])}{multi}</p>'
+                f'<h3>{_esc(det["charg"] or "?")} → {_esc(det["dech"] or "?")}</h3>{etapes}{autres}'
+                f'<div class="tags">{tags}</div></div>', unsafe_allow_html=True)
+            if det["dech_point"]:
+                if st.button(f"Où recharger après {det['dech']} ?", key="ap_vers_tv", type="primary",
+                             icon=":material/swap_horiz:", width="stretch"):
+                    ss["tv_point"] = {"nom": det["dech"], "lat": det["dech_point"][0], "lon": det["dech_point"][1]}
+                    st.switch_page(ui.page_ref("outils/trajets_vides_cit.py"))
 
-MAX_GEO = 1000          # table CP hors ligne : plus besoin de limiter à 120 lieux
-
-mc1, mc2, mc3, mc4 = st.columns([1.3, 1, 1, 1.5])
-with mc1:
-    dates_opt = sorted(dfx["date"].dropna().dt.date.unique())
-    date_lbls = ["Toutes les dates"] + [d.strftime("%d/%m/%Y") for d in dates_opt]
-    msel_date = st.selectbox("Date (carte)", date_lbls)
-with mc2:
-    show_mode = st.radio("Afficher", ["Les deux", "Chargements", "Déchargements"], horizontal=True)
-with mc3:
-    show_arcs = st.checkbox("Relier les points (arcs)", value=True)
-with mc4:
-    _lx = dfx[dfx["localite"].str.strip().ne("") & dfx["type"].isin(["C", "D"])]
-    _lx = _lx.drop_duplicates("lieu_cle")
-    loc_map = {f'{l} ({p} {c})'.replace(" )", ")"): k for l, p, c, k in
+with t_carte:
+    m1, m2, m3 = st.columns([1.4, 1, 2], vertical_alignment="bottom")
+    with m1:
+        show_mode = st.segmented_control("Afficher", ["Les deux", "Chargements", "Déchargements"],
+                                         default="Les deux", key="ap_show") or "Les deux"
+    with m2:
+        show_arcs = st.toggle("Relier les points", value=True, key="ap_arcs", help="Trait du chargement au déchargement de chaque dossier.")
+    _lx = dfx[dfx["localite"].str.strip().ne("") & dfx["type"].isin(["C", "D"])].drop_duplicates("lieu_cle")
+    loc_map = {f'{l} ({p} {c})'.replace(" )", ")"): kk for l, p, c, kk in
                zip(_lx["localite"], _lx["pays"], _lx["cp"], _lx["lieu_cle"])}
-    focus_choice = st.selectbox("Isoler un point", ["— tout afficher"] + sorted(loc_map))
-
-dmap = dfx.copy()
-if msel_date != "Toutes les dates":
-    chosen = pd.to_datetime(msel_date, format="%d/%m/%Y").date()
-    dmap = dmap[dmap["date"].dt.date == chosen]
-
-if dmap.empty:
-    st.info("Aucune activité pour ces filtres carte.")
-else:
-    # Focus manuel via selectbox (le clic carte est géré DANS le fragment)
-    focus_norm_ext = loc_map.get(focus_choice) if focus_choice != "— tout afficher" else None
-
-    # Un point = un lieu exact (pays + CP + localité) : les homonymes ne sont plus fusionnés
-    agg = (dmap[dmap["type"].isin(["C", "D"])]
-               .groupby(["lieu_cle", "type"])
-               .agg(localite=("localite", "first"), cp=("cp", "first"),
-                    pays=("pays", "first"), pays_logi=("pays_logi", "first"),
-                    dept=("dept", "first"),
-                    camions=("dossier", "nunique"),
-                    dos_all=("dossier", lambda s: sorted(set(s))),
-                    dossiers=("dossier", lambda s: ", ".join(sorted(set(s))[:10])))
-               .reset_index())
-    agg = agg[agg["localite"].str.strip() != ""]
-    agg = agg.sort_values("camions", ascending=False).head(MAX_GEO)
-
+    with m3:
+        focus_choice = st.selectbox("Isoler un lieu", ["Tous les lieux"] + sorted(loc_map), key="ap_focus")
+    focus_norm_ext = loc_map.get(focus_choice)
+    MAX_GEO = 1000
+    agg = (dfx[dfx["type"].isin(["C", "D"])]
+           .groupby(["lieu_cle", "type"])
+           .agg(localite=("localite", "first"), cp=("cp", "first"), pays=("pays", "first"),
+                pays_logi=("pays_logi", "first"), dept=("dept", "first"),
+                camions=("dossier", "nunique"), dos_all=("dossier", lambda s: sorted(set(s))),
+                dossiers=("dossier", lambda s: ", ".join(sorted(set(s))[:10])))
+           .reset_index())
+    agg = agg[agg["localite"].str.strip() != ""].sort_values("camions", ascending=False).head(MAX_GEO)
     arc_legs = []
-    for dos in dmap["dossier"].unique():
+    for dos in dfx["dossier"].unique():
         lg = legs.get(dos, {})
         if lg.get("c_loc") or lg.get("d_loc"):
-            arc_legs.append({
-                "dos":    str(dos),
-                "c_loc":  lg.get("c_loc", ""),  "c_cp": lg.get("c_cp", ""),  "c_pays": lg.get("c_pays", ""),
-                "d_loc":  lg.get("d_loc", ""),  "d_cp": lg.get("d_cp", ""),  "d_pays": lg.get("d_pays", ""),
-                "c_cle":  lg.get("c_cle", ""),  "d_cle": lg.get("d_cle", ""),
-            })
-
-    points_all, arcs_all = build_geo_data(
-        agg.to_json(orient="records"),
-        json.dumps(arc_legs, ensure_ascii=False))
-
+            arc_legs.append({"dos": str(dos),
+                             "c_loc": lg.get("c_loc", ""), "c_cp": lg.get("c_cp", ""), "c_pays": lg.get("c_pays", ""),
+                             "d_loc": lg.get("d_loc", ""), "d_cp": lg.get("d_cp", ""), "d_pays": lg.get("d_pays", ""),
+                             "c_cle": lg.get("c_cle", ""), "d_cle": lg.get("d_cle", "")})
+    points_all, arcs_all = build_geo_data(agg.to_json(orient="records"), json.dumps(arc_legs, ensure_ascii=False))
     if not points_all:
-        st.info("Aucun lieu localisé : vérifiez les colonnes pays / code postal / localité.")
+        st.markdown('<div class="ap-vide">Aucun lieu localisé : vérifiez les colonnes pays, code postal et localité.</div>',
+                    unsafe_allow_html=True)
     else:
         from collections import defaultdict
         pays_rows = defaultdict(list)
-        for _, row in dmap.iterrows():
-            pl = row.get("pays_logi", row.get("pays", "??"))
-            pays_rows[pl].append(row)
+        for _, row in dfx.iterrows():
+            pays_rows[row.get("pays_logi", row.get("pays", "??"))].append(row)
+        render_pays_carte(points_all, arcs_all, len(agg), pays_rows, show_mode, show_arcs, focus_norm_ext, legs, MAX_GEO)
 
-        render_pays_carte(points_all, arcs_all, len(agg), pays_rows,
-                          show_mode, show_arcs, focus_norm_ext, legs, MAX_GEO)
-
-# ─── Regroupements géographiques ─────────────────────────────────────────────
-st.markdown('<div class="sect">Regroupements géographiques <span class="hint">≥2 dossiers même jour · même département '
-            '(France) ou même zone CP du même pays</span></div>', unsafe_allow_html=True)
-
-clusters = []
-# « dept » vaut « 59 » en France et « BE 40 » ailleurs : Liège (BE 40) ne rejoint plus les Landes (40)
-for (d, dept, typ), g in dfx[dfx["dept"].str.len() > 0].groupby(
-        [dfx["date"].dt.date, "dept", "type"]):
-    if typ not in ("C", "D") or g["dossier"].nunique() < 2:
-        continue
-    clusters.append({
-        "date": d, "dept": dept, "type": typ, "n": g["dossier"].nunique(),
-        "pays": g["pays"].mode().iloc[0] if not g["pays"].mode().empty else "",
-        "lieux": ", ".join(sorted(set(x for x in g["localite"] if x))[:6]),
-    })
-clusters.sort(key=lambda c: (-c["n"], c["date"]))
-
-if clusters:
-    cc = st.columns(2)
-    for i, cl in enumerate(clusters[:12]):
-        kind = "Chargements" if cl["type"] == "C" else "Déchargements"
-        cls  = "" if cl["type"] == "C" else "d"
-        flag = PAYS_FLAGS.get(cl["pays"], "")
-        if " " in cl["dept"]:
-            dlbl = f"{cl['dept'].split()[0]} · zone CP {cl['dept'].split()[1]}"
-        else:
-            dnom = DEPT_NOM.get(cl["dept"], "")
-            dlbl = f"Dépt {cl['dept']}" + (f" · {dnom}" if dnom else "")
-        with cc[i % 2]:
-            html(f"""
-            <div class="cluster {cls}">
-              <div class="ch">{flag} {cl['n']} {kind} — {dlbl}</div>
-              <div class="cs">{cl['date'].strftime('%d/%m/%Y')} · {cl['lieux']}</div>
-            </div>""")
-    if len(clusters) > 12:
-        st.caption(f"… et {len(clusters) - 12} autre(s) regroupement(s).")
-else:
-    st.caption("Aucune concentration de 2 dossiers ou plus sur un même jour / département dans ce périmètre.")
-
-def _badge(t):
-    if t["is_tra"]:
-        dep = (t["depart_trac"] or "").strip()
-        extra = "" if (not dep or dep.upper() == "TRA") else f" · {dep}"
-        return f'<span class="tag tra">TRA{extra}</span>'
-    return '<span class="tag cb">CB</span>'
-
-def _tags(t, with_badge=True):
-    tg = [_badge(t)] if with_badge else []
-    if t["chauffeur"]: tg.append(f'<span class="tag">👤 {t["chauffeur"]}</span>')
-    if t["immat"]:     tg.append(f'<span class="tag">🚚 {t["immat"]}</span>')
-    if t["remorque"]:  tg.append(f'<span class="tag">📦 {t["remorque"]}</span>')
-    if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:22]}</span>')
-    return "".join(tg)
-
-def _ddate(t):
-    diff = (pd.notna(t["d_date"]) and
-            (pd.isna(t["plan_date"]) or t["d_date"].date() != t["plan_date"].date()))
-    return f' · {t["d_date"].strftime("%d/%m")}' if diff else ""
-
-with st.expander(f"Planning par jour — {vue}", expanded=False):
-    if vue == "Par jour":
-        lc1, lc2, _sp = st.columns([1.1, 1.5, 2])
-        with lc1:
-            layout = st.radio("Disposition", ["Lignes", "Cartes"], horizontal=True, key="layout_pj")
-        with lc2:
-            densite = st.select_slider("Densité", options=["Compact", "Normal", "Large"],
-                                       value="Normal", key="dens_pj")
-        dens_cls = {"Compact": "dens-compact", "Normal": "dens-normal", "Large": "dens-large"}[densite]
-        df_sel = df_scope[df_scope[dim_col].isin(sel)] if sel else df_scope
-        trips  = build_trips(df_sel)
-        _lo2, _hi2 = _range_bounds(date_range)
-        if _lo2 is not None:
-            d0t, d1t = pd.Timestamp(_lo2), pd.Timestamp(_hi2)
-            trips = [t for t in trips if pd.notna(t["plan_date"]) and d0t <= t["plan_date"] <= d1t]
-        if not trips:
-            st.warning("Aucun dossier sur cette période.")
-        else:
-            from collections import defaultdict
-            by_day = defaultdict(list)
-            for t in trips:
-                by_day[t["plan_date"].date()].append(t)
-            for day in sorted(by_day.keys()):
-                day_trips = sorted(by_day[day], key=lambda t: t["plan_hval"])
-                n_full = sum(1 for t in day_trips if t["has_c"] and t["has_d"])
-                html(f'<div class="dayhead">{pd.Timestamp(day).strftime("%A %d %B %Y").capitalize()}'
-                     f'<span class="cnt">{len(day_trips)} dossiers · {n_full} avec charg.+déch.</span></div>')
-                if layout == "Cartes":
-                    parts = ['<div class="trips">']
-                    for t in day_trips:
-                        cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
-                        cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
-                        ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
-                        leg_c = (f'<div class="leg c"><span class="lh">{t["c_heure"] or "—"}</span>'
-                                 f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
-                                 f'<span class="ls">{t["c_site"] or "—"}</span></div>') if t["has_c"] \
-                                else '<div class="leg c off">— pas de chargement dans l’export —</div>'
-                        leg_d = (f'<div class="leg d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
-                                 f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
-                                 f'<span class="ls">{t["d_site"] or "—"}</span></div>') if t["has_d"] \
-                                else '<div class="leg d off">— pas de déchargement dans l’export —</div>'
-                        parts.append(
-                            f'<div class="trip"><div class="trip-h">'
-                            f'<span class="dos">N° {t["dossier"]}</span>'
-                            f'<span class="trip-tags">{_tags(t)}</span></div>'
-                            f'{leg_c}<div class="arrow">↓</div>{leg_d}</div>')
-                    parts.append('</div>')
-                    html("".join(parts))
-                else:
-                    parts = [f'<div class="rows {dens_cls}">']
-                    for t in day_trips:
-                        cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
-                        cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
-                        ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
-                        cell_c = (f'<div class="leg2 c"><span class="lh">{t["c_heure"] or "—"}</span>'
-                                  f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
-                                  f'<span class="ls">{t["c_site"] or ""}</span></div>') if t["has_c"] \
-                                 else '<div class="leg2 off">— pas de chargement dans l’export —</div>'
-                        cell_d = (f'<div class="leg2 d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
-                                  f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
-                                  f'<span class="ls">{t["d_site"] or ""}</span></div>') if t["has_d"] \
-                                 else '<div class="leg2 off">— pas de déchargement dans l’export —</div>'
-                        parts.append(
-                            f'<div class="row">'
-                            f'<div class="c1"><span class="dos">N° {t["dossier"]}</span>{_badge(t)}</div>'
-                            f'{cell_c}<div class="rarrow">→</div>{cell_d}'
-                            f'<div class="res">{_tags(t, with_badge=False)}</div></div>')
-                    parts.append('</div>')
-                    html("".join(parts))
+with t_res:
+    if synthese.empty:
+        st.markdown('<div class="ap-vide">Aucune ressource sur la période.</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="sect">Planning par {dimension.lower()} '
-                    f'<span class="hint">enchaînement chronologique des activités</span></div>',
-                    unsafe_allow_html=True)
-        _lo3, _hi3 = _range_bounds(date_range)
-        d0r = pd.Timestamp(_lo3) if _lo3 is not None else dfx["date"].min()
-        d1r = pd.Timestamp(_hi3) if _hi3 is not None else dfx["date"].max()
-        with st.spinner("Analyse des ressources…"):
-            coords = coords_lieux(dfx)
-            synthese, vides = analyse_ressources(dfx, dim_col, d0r, d1r, coords)
-        if not synthese.empty:
-            st.caption(f"Jours ouvrés du {d0r:%d/%m/%Y} au {d1r:%d/%m/%Y}. Km estimés au vol d'oiseau × 1,3 : "
-                       "chargés = 1er chargement → dernier déchargement du dossier ; à vide = dernier déchargement → "
-                       "1er chargement du dossier suivant de la même ressource.")
-            st.dataframe(synthese, hide_index=True, width="stretch",
-                         column_config={"Part à vide": st.column_config.NumberColumn(format="percent"),
-                                        "Dates sans activité": st.column_config.TextColumn(width="medium")})
-        info_res = synthese.set_index("Ressource") if not synthese.empty else pd.DataFrame()
-        resources = [r for r in dfx[dim_col].dropna().unique() if str(r).strip()]
-        resources = sorted(resources, key=lambda r: -len(dfx[dfx[dim_col] == r]))
-        MAX_LANES = 40
-        for r in resources[:MAX_LANES]:
-            gr = dfx[dfx[dim_col] == r].sort_values(["date", "_hval"])
-            is_tra = bool(gr["is_tra"].any())
-            nb = len(gr)
-            meta_bits = []
-            if dim_col != "chauffeur":
-                chs = sorted(set(x for x in gr["chauffeur"] if x))
-                if chs:
-                    meta_bits.append("👤 " + ", ".join(chs[:3]))
-            if dim_col != "remorque":
-                rms = sorted(set(x for x in gr["remorque"] if x))
-                if rms:
-                    meta_bits.append("📦 " + ", ".join(rms[:3]))
-            if r in info_res.index:
-                ir = info_res.loc[r]
-                if ir["Jours ouvrés sans activité"]:
-                    meta_bits.append(f"{int(ir['Jours ouvrés sans activité'])} j ouvré(s) sans activité")
-                if ir["Km à vide estimés"]:
-                    meta_bits.append(f"~{int(ir['Km à vide estimés'])} km à vide")
-            tra_badge = '<span class="tag tra" style="font-size:.66rem">TRA</span>' if is_tra else ''
-            stops = ""
-            dos_prec = None
-            for _, row in gr.iterrows():
-                if row["dossier"] != dos_prec and (r, row["dossier"]) in vides:
-                    stops += f'<span class="stop v">↳ ~{vides[(r, row["dossier"])]:.0f} km à vide</span>'
-                dos_prec = row["dossier"]
-                kl = {"C": "c", "D": "d", "A": "o"}.get(row["type"], "")
-                dlabel = row["date"].strftime("%d/%m") if pd.notna(row["date"]) else "—"
-                nom_act = row["localite"].upper() or "?"
-                if row["type"] == "A":
-                    nom_act = f'{row["_act_raw"].title()} · {nom_act}'
-                stops += (f'<span class="stop {kl}"><span class="t">{dlabel} {row["heure"]}</span>'
-                          f'{nom_act}</span>')
-            html(f"""
-            <div class="lane">
-              <div class="who">{tra_badge}{r}
-                <span class="meta">· {nb} activités{(" · " + " · ".join(meta_bits)) if meta_bits else ""}</span></div>
-              <div class="flow">{stops}</div>
-            </div>""")
-        if len(resources) > MAX_LANES:
-            st.caption(f"Affichage des {MAX_LANES} ressources les plus actives.")
+        st.caption("Jours ouvrés du lundi au vendredi. Km estimés au vol d’oiseau × 1,3 : chargés = 1er chargement → "
+                   "dernier déchargement ; à vide = dernier déchargement → lavage / décrochage → chargement suivant.")
+        st.dataframe(
+            synthese.rename(columns={"Ressource": dimension}).assign(**{"Part à vide": synthese["Part à vide"] * 100}),
+            hide_index=True, width="stretch",
+            height=min(640, 40 + 36 * len(synthese)),
+            column_config={
+                "Part à vide": st.column_config.ProgressColumn("Part à vide", format="%.0f %%", min_value=0, max_value=100),
+                "Jours ouvrés sans activité": st.column_config.NumberColumn("Jours sans activité"),
+                "Dates sans activité": st.column_config.TextColumn("Dates", width="medium"),
+                "Plus long écart (h)": st.column_config.NumberColumn("Plus long arrêt (h)", format="%.0f"),
+                "Km chargés estimés": st.column_config.NumberColumn("Km chargés", format="%.0f"),
+                "Km à vide estimés": st.column_config.NumberColumn("Km à vide", format="%.0f"),
+            })
 
-with st.expander("Tableau détaillé + export"):
+with t_grp:
+    clusters = []
+    for (d, dept, typ), g in dfx[dfx["dept"].str.len() > 0].groupby([dfx["date"].dt.date, "dept", "type"]):
+        if typ not in ("C", "D") or g["dossier"].nunique() < 2:
+            continue
+        clusters.append({"date": d, "dept": dept, "type": typ, "n": g["dossier"].nunique(),
+                         "lieux": ", ".join(sorted({str(x).title() for x in g["localite"] if x})[:5])})
+    clusters.sort(key=lambda c: (-c["n"], c["date"]))
+    if not clusters:
+        st.markdown('<div class="ap-vide">Aucun jour avec au moins 2 dossiers dans un même département '
+                    '(ou une même zone CP à l’étranger).</div>', unsafe_allow_html=True)
+    else:
+        st.caption("Au moins 2 dossiers le même jour dans un même département français, ou une même zone CP "
+                   "du même pays à l’étranger : des pistes de groupage.")
+        cartes = []
+        for cl in clusters[:30]:
+            if " " in cl["dept"]:
+                zone = f"{cl['dept'].split()[0]} · zone CP {cl['dept'].split()[1]}"
+            else:
+                zone = f"Dépt {cl['dept']}" + (f" · {DEPT_NOM[cl['dept']]}" if cl["dept"] in DEPT_NOM else "")
+            t = "c" if cl["type"] == "C" else "d"
+            cartes.append(
+                f'<div class="ap-groupe"><span class="t {t}">{"Chargements" if t == "c" else "Déchargements"}</span>'
+                f'<div class="n">{cl["n"]} dossiers · {_esc(zone)}</div>'
+                f'<div class="z">{PL.JOURS[cl["date"].weekday()]} {cl["date"]:%d/%m} · {_esc(cl["lieux"])}</div></div>')
+        st.markdown('<div class="ap-groupes">' + "".join(cartes) + "</div>", unsafe_allow_html=True)
+        if len(clusters) > 30:
+            st.caption(f"… et {len(clusters) - 30} autre(s).")
+
+with t_tab:
     show = dfx.copy()
-    show["Type"]   = np.where(show["type"].eq("A"), "Autre (" + show["_act_raw"] + ")",
-                              show["type"].map(TYPE_LIB).fillna("?"))
+    show["Type"] = np.where(show["type"].eq("A"), "Autre (" + show["_act_raw"] + ")", show["type"].map(TYPE_LIB).fillna("?"))
     show["Flotte"] = np.where(show["is_tra"], "Tractionnaire", "CB")
-    show["Date"]   = show["date"].dt.strftime("%d/%m/%Y")
-    table = show[["Date","heure","Type","dossier","localite","dept","pays",
-                  "site","produit","chauffeur","immat","remorque","Flotte","depart_trac"]].rename(columns={
-        "heure":"Heure","dossier":"N° Dossier","localite":"Localité","dept":"Dépt",
-        "pays":"Pays","site":"Site","produit":"Produit","chauffeur":"Chauffeur",
-        "immat":"Immat. tracteur","remorque":"Remorque","depart_trac":"Départ. tracteur"})
-    st.dataframe(table, hide_index=True, width="stretch")
+    show = show.sort_values(["_dt", "dossier"])
+    show["Date"] = show["date"].dt.strftime("%d/%m/%Y")
+    table = show[["Date", "heure", "Type", "dossier", "localite", "cp", "pays", "site", "produit", "chauffeur",
+                  "immat", "remorque", "Flotte"]].rename(columns={
+        "heure": "Heure", "dossier": "N° Dossier", "localite": "Localité", "cp": "CP", "pays": "Pays", "site": "Site",
+        "produit": "Produit", "chauffeur": "Chauffeur", "immat": "Tracteur", "remorque": "Remorque"})
+    tb1, tb2 = st.columns([4, 1], vertical_alignment="center")
+    tb1.caption(f"{_nb(len(table))} activités · {_nb(table['N° Dossier'].nunique())} dossiers · "
+                f"{PL.libelle_periode(t0, t1)}")
     buf = io.BytesIO()
     table.to_excel(buf, index=False, engine="openpyxl")
-    st.download_button("Exporter Excel", data=buf.getvalue(),
-                       file_name="planning_activites.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    tb2.download_button("Exporter Excel", data=buf.getvalue(), file_name=f"planning_{t0:%Y%m%d}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
+    st.dataframe(table, hide_index=True, width="stretch", height=min(640, 40 + 36 * len(table)))

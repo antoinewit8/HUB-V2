@@ -247,17 +247,21 @@ section.main p, section.main label { color: var(--ap-text); }
 [data-testid="stTabs"] [data-baseweb="tab"] p { font-weight: 500; }
 [data-testid="stMain"] iframe { border: none; }
 
-/* Boutons : pilule grise (secondaire) ou bleue (principal) */
-[data-testid="stMain"] .stDownloadButton > button, [data-testid="stMain"] .stButton > button,
-[data-testid="stMain"] .stFormSubmitButton > button, [data-testid="stMain"] [data-testid="stLinkButton"] a {
+/* Boutons : pilule grise (secondaire) ou bleue (principal).
+   Sélecteurs descendants : depuis Streamlit 1.5x le bouton n'est plus l'enfant direct de .stButton. */
+[data-testid="stMain"] .stDownloadButton button, [data-testid="stMain"] .stButton button,
+[data-testid="stMain"] .stFormSubmitButton button, [data-testid="stMain"] [data-testid="stLinkButton"] a,
+[data-testid="stMain"] [data-testid="stPopover"] > div > button, [data-testid="stMain"] [data-testid="stPopoverButton"] {
   border-radius: 980px; border: none; background: var(--ap-soft); min-height: 42px; padding: 0 20px; box-shadow: none;
 }
-[data-testid="stMain"] .stDownloadButton > button p, [data-testid="stMain"] .stButton > button p,
-[data-testid="stMain"] .stFormSubmitButton > button p, [data-testid="stMain"] [data-testid="stLinkButton"] a p {
+[data-testid="stMain"] .stDownloadButton button p, [data-testid="stMain"] .stButton button p,
+[data-testid="stMain"] .stFormSubmitButton button p, [data-testid="stMain"] [data-testid="stLinkButton"] a p,
+[data-testid="stMain"] [data-testid="stPopover"] button p, [data-testid="stMain"] [data-testid="stPopoverButton"] p {
   color: var(--ap-blue) !important; font-weight: 500;
 }
-[data-testid="stMain"] .stDownloadButton > button:hover, [data-testid="stMain"] .stButton > button:hover,
-[data-testid="stMain"] .stFormSubmitButton > button:hover { background: #dedee3; }
+[data-testid="stMain"] .stDownloadButton button:hover, [data-testid="stMain"] .stButton button:hover,
+[data-testid="stMain"] .stFormSubmitButton button:hover, [data-testid="stMain"] [data-testid="stPopover"] > div > button:hover,
+[data-testid="stMain"] [data-testid="stPopoverButton"]:hover { background: #dedee3; }
 [data-testid="stMain"] button[kind="primary"], [data-testid="stMain"] button[data-testid="stBaseButton-primary"] {
   background: var(--ap-blue) !important;
 }
