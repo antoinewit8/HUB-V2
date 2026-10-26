@@ -14,6 +14,23 @@ from core import ui
 
 ui.page("calcul_km", "Déposez un fichier Excel : les distances poids lourds sont calculées via PTV, ligne par ligne.")
 
+# Après une mise à jour du dépôt, Streamlit relit la page mais garde en mémoire les
+# modules déjà importés (run_km, modules.*) : on les recharge si la version ne suit pas.
+VERSION_MOTEUR = 3
+
+
+def _moteur():
+    import importlib
+    nom = "tools.km_calcul.run_km"
+    mod = sys.modules.get(nom)
+    if mod is not None and getattr(mod, "VERSION", 0) >= VERSION_MOTEUR:
+        return mod
+    for k in [k for k in sys.modules if k == nom or k == "modules" or k.startswith("modules.")
+              or k == "km_geo_offline"]:
+        del sys.modules[k]
+    return importlib.import_module(nom)
+
+
 # Clés de session propres à la page (les autres outils partagent le même session_state)
 K_BYTES, K_NOM, K_JOB = "km_upload_bytes", "km_upload_nom", "km_job"
 K_RES, K_RES_NOM, K_STATS = "km_result_bytes", "km_result_name", "km_stats"
@@ -53,9 +70,11 @@ if st.session_state.get(K_BYTES) and not (job and job["en_cours"]) and st.button
            "tmp_path": tmp_path, "debut": time.time()}
     st.session_state[K_JOB] = job
 
+    moteur = _moteur()                      # chargé ici (fil principal), pas dans le fil de calcul
+
     def run_in_thread(job, tmp_path, calculer_peage, super_pref, avec_cartes):
         try:
-            from tools.km_calcul.run_km import run_calcul_km
+            run_calcul_km = moteur.run_calcul_km
 
             def on_progress(current, total, message):
                 job["progress"] = (current, total, message)

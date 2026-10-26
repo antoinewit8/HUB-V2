@@ -29,6 +29,7 @@ KM_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(KM_DIR, "cache_trajets.json")
 GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
 
+VERSION = 3                     # lu par la page : version en mémoire périmée → rechargement
 MAX_WORKERS = 6
 CACHE_VERSION = 2
 DUREE_CACHE_JOURS = {"peage": 180, "km": 365}
@@ -199,7 +200,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         def _calculer_cle(cle, origin, dest, po, pd_, waypoints, prohibited, wp, notes):
             with _lock:
                 en_cache = cache.get(cle)
-            if en_cache and _valide(en_cache, calculer_peage):
+            # entrée sans lien carte (serveur absent la fois précédente) : recalculée si on veut la carte
+            if en_cache and _valide(en_cache, calculer_peage) and (en_cache.get("map_url") or not avec_cartes):
                 data, depuis_cache = dict(en_cache), True
             else:
                 errs = []
@@ -311,7 +313,12 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             if err:
                 stats["avertissements"].append(f"Cache non enregistré ({os.path.basename(path)}) : {err}")
         if avec_cartes and cartes.serveur_disponible() is False:
-            stats["avertissements"].append("Serveur cartes injoignable : colonne « Carte PTV » vide pour les nouveaux trajets.")
+            stats["avertissements"].append(f"Serveur cartes injoignable ({cartes.MAP_SERVER_URL}) : colonne « Carte PTV » vide pour les nouveaux trajets.")
+        elif avec_cartes and cartes.derniere_erreur():
+            stats["avertissements"].append(f"Serveur cartes en erreur ({cartes.derniere_erreur()}) : liens carte manquants.")
+        n_sans = sum(1 for x in stats["resultats"] if x["KM"] is not None and not x["Carte"])
+        if avec_cartes and n_sans:
+            stats["avertissements"].append(f"{n_sans} trajets sans lien carte.")
 
         stats["resultats"].sort(key=lambda x: (x["Feuille"], x["Ligne"]))
         return {"success": True, "output_path": output_path, "error": "", "stats": stats}

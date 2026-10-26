@@ -24,11 +24,16 @@ _etat = {"ok": None}
 _etat_lock = threading.Lock()
 
 
+_reveil = {"thread": None}
+
+
 def _ensure_server_awake(max_essais: int = 6) -> bool:
-    """Réveille le serveur (jusqu'à ~60 s) ; mémorise l'échec pour ne pas réattendre à chaque trajet."""
+    """Réveille le serveur ; mémorise l'échec pour ne pas réattendre à chaque trajet.
+    Render gratuit endormi : la 1re requête reste en attente 30 à 60 s le temps du
+    démarrage, d'où un délai long par essai (6 × 30 s au plus)."""
     for attempt in range(1, max_essais + 1):
         try:
-            r = httpx.get(f"{MAP_SERVER_URL}/health", timeout=10)
+            r = httpx.get(f"{MAP_SERVER_URL}/health", timeout=30)
             if r.status_code == 200:
                 print(f"      ✅ Serveur cartes prêt ({attempt} essai(s))", flush=True)
                 with _etat_lock:
@@ -37,7 +42,7 @@ def _ensure_server_awake(max_essais: int = 6) -> bool:
         except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPError):
             pass
         print(f"      ⏳ Réveil serveur cartes... ({attempt}/{max_essais})", flush=True)
-        time.sleep(10)
+        time.sleep(5)
     print("      ❌ Serveur cartes injoignable : les liens carte seront vides", flush=True)
     with _etat_lock:
         _etat["ok"] = False
@@ -54,13 +59,19 @@ def warm_up_async() -> threading.Thread:
     L'état est remis à « inconnu » : un échec d'un calcul précédent ne bloque pas celui-ci."""
     with _etat_lock:
         _etat["ok"] = None
+        _etat["erreur"] = ""
     t = threading.Thread(target=_ensure_server_awake, daemon=True)
     t.start()
+    _reveil["thread"] = t
     return t
 
 
 def serveur_disponible():
     return _etat["ok"]
+
+
+def derniere_erreur() -> str:
+    return _etat.get("erreur", "")
 
 
 def _simplifier(points: list, tol_m: float = 2.0) -> list:
@@ -106,6 +117,10 @@ def create_route_url(
     polyline:    list,
     prix_peage:  float = 0.0,
 ) -> str:
+    # Réveil en cours : on attend sa fin plutôt que de conclure trop tôt que le serveur est absent
+    t = _reveil["thread"]
+    if _etat["ok"] is None and t is not None and t.is_alive():
+        t.join(timeout=200)
     if _etat["ok"] is False:
         return ""
     payload = {
@@ -129,10 +144,12 @@ def create_route_url(
                 return r.json().get("url", "")
             except (httpx.TimeoutException, httpx.ConnectError):
                 print(f"      ⏳ Serveur cartes lent ou endormi ({attempt}/{MAX_RETRIES})", flush=True)
-                if not _ensure_server_awake(max_essais=3 if _etat["ok"] is None else 1):
+                if not _ensure_server_awake(max_essais=3):
                     return ""
             except httpx.HTTPStatusError as e:
-                print(f"      ⚠️ Serveur cartes HTTP {e.response.status_code}", flush=True)
+                print(f"      ⚠️ Serveur cartes HTTP {e.response.status_code} : {e.response.text[:200]}", flush=True)
+                with _etat_lock:
+                    _etat["erreur"] = f"HTTP {e.response.status_code}"
                 return ""
             except Exception as e:
                 print(f"      ⚠️ Serveur cartes : {e}", flush=True)
