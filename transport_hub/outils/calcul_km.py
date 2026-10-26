@@ -16,7 +16,7 @@ ui.page("calcul_km", "Déposez un fichier Excel : les distances poids lourds son
 
 # Après une mise à jour du dépôt, Streamlit relit la page mais garde en mémoire les
 # modules déjà importés (run_km, modules.*) : on les recharge si la version ne suit pas.
-VERSION_MOTEUR = 3
+VERSION_MOTEUR = 4
 
 
 def _moteur():

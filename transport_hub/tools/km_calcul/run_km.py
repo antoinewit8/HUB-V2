@@ -29,7 +29,7 @@ KM_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(KM_DIR, "cache_trajets.json")
 GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
 
-VERSION = 3                     # lu par la page : version en mémoire périmée → rechargement
+VERSION = 4                     # lu par la page : version en mémoire périmée → rechargement
 MAX_WORKERS = 6
 CACHE_VERSION = 2
 DUREE_CACHE_JOURS = {"peage": 180, "km": 365}
@@ -227,7 +227,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 depuis_cache = False
 
             if data.get("violated"):
-                notes.append("PTV : restriction PL non respectée sur le tracé")
+                notes.append("PTV : restriction PL sur le tracé (souvent l'accès au centre de la commune)")
             ref = wp.get("km_reference")
             if ref and data["km"] and abs(data["km"] - float(ref)) / float(ref) > ECART_REFERENCE:
                 notes.append(f"écart {data['km'] - float(ref):+.0f} km avec la route apprise ({float(ref):.0f} km)")
@@ -268,7 +268,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 if g and g.get("niveau") == "à vérifier":
                     a_verifier = True
             notes += res.get("notes", [])
-            if any(("restriction" in n) or ("écart" in n) or ("détour suspect" in n) for n in res.get("notes", [])):
+            # « restriction PL » (violated) reste en note : souvent le dernier tronçon vers le centre de la commune
+            if any(("écart" in n) or ("détour suspect" in n) for n in res.get("notes", [])):
                 a_verifier = True
 
             data = res.get("data")
