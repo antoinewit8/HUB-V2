@@ -2,6 +2,7 @@ import os
 import re
 import openpyxl
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
 
 # ============================================================
 # CONSTANTES
@@ -28,6 +29,14 @@ PAYS_MAP = {
     "PORTUGAL": "Portugal", "GRÈCE": "Greece", "NETHERLANDS": "Netherlands",
     "GERMANY": "Germany", "SPAIN": "Spain", "ITALY": "Italy",
     "AUSTRIA": "Austria", "SWITZERLAND": "Switzerland", "POLAND": "Poland",
+    # Noms anglais / variantes absents jusqu'ici : « 4020, BELGIUM » devenait « 40200 »
+    "BELGIUM": "Belgium", "BELGIE": "Belgium", "BELGIEN": "Belgium",
+    "LUXEMBURG": "Luxembourg", "FRANKREICH": "France", "NIEDERLANDE": "Netherlands",
+    "UNITED KINGDOM": "United Kingdom", "UK": "United Kingdom",
+    "CZECH REPUBLIC": "Czech Republic", "CZ": "Czech Republic", "DENMARK": "Denmark",
+    "SWEDEN": "Sweden", "HUNGARY": "Hungary", "ROMANIA": "Romania", "BULGARIA": "Bulgaria",
+    "CROATIA": "Croatia", "IRELAND": "Ireland", "GREECE": "Greece", "IRL": "Ireland",
+    "NL": "Netherlands", "CH": "Switzerland", "GB": "United Kingdom", "S": "Sweden",
 }
 
 CP_LENGTHS = {
@@ -207,29 +216,36 @@ GPS_FIXES_ORIGIN = {
 ORIG_PAYS_KEYWORDS = [
     "pays", "country", "country of origin", "orig cntry",
     "pays départ", "pays depart", "pays origine",
+    "pays chargement", "pays de chargement", "code pays chargement",
 ]
 ORIG_CP_KEYWORDS = [
     "code postal", "cp", "postal code", "postal code origin",
     "orig reg", "cp départ", "cp depart", "code postal origine",
+    "cp chargement", "cp charg", "c.p. chargement", "code postal chargement",
 ]
 ORIG_VILLE_KEYWORDS = [
     "ville", "city", "city of origin", "orig zone txt",
     "localité", "localite", "origin", "depart", "départ",
     "origine", "ville départ", "ville depart",
+    "ville chargement", "localité chargement", "localite chargement", "lieu chargement",
 ]
 DEST_PAYS_KEYWORDS = [
     "pays", "country", "country of destination", "dest cntry",
     "pays destination", "dest pays",
+    "pays déchargement", "pays dechargement", "pays livraison", "code pays déchargement",
 ]
 DEST_CP_KEYWORDS = [
     "département", "departement", "code postal", "cp",
     "postal code", "postal code destination", "dest reg",
     "cp destination", "cp dech", "cp déchargement",
+    "cp dechargement", "c.p. déchargement", "cp livraison", "code postal déchargement",
 ]
 DEST_VILLE_KEYWORDS = [
     "ville2", "ville", "city", "city of destination",
     "dest zone txt", "destination", "ville destination",
     "ville dest", "localite", "localité",
+    "ville déchargement", "ville dechargement", "localité déchargement", "localite dechargement",
+    "ville livraison", "lieu déchargement",
 ]
 
 # Mots-clés des lignes de groupe (ligne au-dessus des headers)
@@ -255,12 +271,47 @@ def normalize(val):
     return re.sub(r'\s+', ' ', str(val).strip().lower())
 
 
+# Pays dont le CP compte 5 chiffres avec un 0 initial possible (perdu quand Excel stocke un nombre)
+_CP5_ZERO = {"FR", "F", "DE", "D", "IT", "I", "ES", "E"}
+
+
+def cp_texte(cp) -> str:
+    """Valeur de cellule → texte du CP : 2100 → '2100', 59000.0 → '59000', ' L-1234 ' → 'L-1234'."""
+    if cp is None:
+        return ""
+    if isinstance(cp, float):
+        if cp != cp:                                   # NaN
+            return ""
+        if cp.is_integer():
+            cp = int(cp)
+    s = str(cp).strip()
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+
+def split_cp_pays(cp: str):
+    """« L-1234 » → ('L', '1234') ; « F-59000 » → ('F', '59000') ; « 4020 » → ('', '4020')."""
+    m = re.match(r"^\s*([A-Za-z]{1,3})\s*-\s*(\d.*)$", cp or "")
+    if m:
+        return m.group(1).upper(), m.group(2).strip()
+    return "", (cp or "").strip()
+
+
 def pad_postal_code(cp, country_prefix):
+    """Complète un CP numérique.
+    - 4 chiffres en France / Allemagne / Italie / Espagne : 0 initial perdu → à gauche (2100 → 02100)
+    - 1 à 3 chiffres : département ou zone → à droite (13 → 13000), comportement historique
+    """
+    cp = cp_texte(cp)
     if not cp:
         return ""
-    target_len = CP_LENGTHS.get(country_prefix.upper(), 5)
-    if target_len == 0:
+    prefix = str(country_prefix or "").upper()
+    target_len = CP_LENGTHS.get(prefix, 5)
+    if target_len == 0 or not cp.isdigit():
         return cp
+    if len(cp) == target_len - 1 and target_len == 5 and prefix in _CP5_ZERO:
+        return cp.zfill(target_len)
     if len(cp) < target_len:
         cp = cp + "0" * (target_len - len(cp))
     return cp
@@ -451,14 +502,23 @@ def parse_origin(origin_str):
     return origin_str
 
 
-def parse_origin_from_parts(city, postal_code, country):
-    country     = str(country     or "").strip()
-    city        = str(city        or "").strip()
-    postal_code = str(postal_code or "").strip()
+def _iso_de(pays_full, defaut):
+    return next((k for k, v in PAYS_MAP.items() if v == pays_full and len(k) == 2 and k.isupper()), defaut)
 
-    pays_full = PAYS_MAP.get(country.upper(), country)
-    pays_iso  = next((k for k, v in PAYS_MAP.items() if v == pays_full and len(k) == 2 and k.isupper()), country)
-    cp_num    = pad_postal_code(postal_code, pays_iso)
+
+def _pays_complet(country, cp_pays=""):
+    country = str(country or "").strip()
+    pays_full = PAYS_MAP.get(country.upper(), "")
+    if not pays_full and cp_pays:
+        pays_full = PAYS_MAP.get(cp_pays.upper(), "")
+    return pays_full or country or cp_pays
+
+
+def parse_origin_from_parts(city, postal_code, country):
+    city = str(city or "").strip()
+    cp_pays, cp_num = split_cp_pays(cp_texte(postal_code))
+    pays_full = _pays_complet(country, cp_pays)
+    cp_num = pad_postal_code(cp_num, _iso_de(pays_full, str(country or "").strip() or cp_pays))
 
     if city:
         return f"{city}, {cp_num}, {pays_full}"
@@ -469,26 +529,10 @@ def parse_origin_from_parts(city, postal_code, country):
 
 
 def parse_destination(city, postal_code, country):
-    country     = str(country     or "").strip()
-    city        = str(city        or "").strip()
-    postal_code = str(postal_code or "").strip()
-
-    cp_pays = ""
-    cp_num  = ""
-    if "-" in postal_code:
-        parts   = postal_code.split("-", 1)
-        cp_pays = parts[0].strip()
-        cp_num  = parts[1].strip()
-    else:
-        cp_num = postal_code
-
-    pays_full = PAYS_MAP.get(country.upper(), country)
-    if not pays_full or pays_full == country:
-        pays_full = PAYS_MAP.get(cp_pays.upper(), pays_full or cp_pays)
-
-    pays_prefix = cp_pays if cp_pays else country
-    pays_iso    = next((k for k, v in PAYS_MAP.items() if v == pays_full and len(k) == 2 and k.isupper()), pays_prefix)
-    cp_num      = pad_postal_code(cp_num, pays_iso)
+    city = str(city or "").strip()
+    cp_pays, cp_num = split_cp_pays(cp_texte(postal_code))
+    pays_full = _pays_complet(country, cp_pays)
+    cp_num = pad_postal_code(cp_num, _iso_de(pays_full, cp_pays or str(country or "").strip()))
 
     if city.lower() in ("all cities", "all", ""):
         base_zone = f"{cp_num}, {pays_full}"
@@ -506,99 +550,123 @@ def parse_destination(city, postal_code, country):
         return f"{city}, {cp_num}, {pays_full}"
 
 
+def decouper_lieu(texte: str):
+    """« Ville, CP, Pays » / « CP, Pays » / « Pays » → (pays, cp, ville)."""
+    morceaux = [m.strip() for m in str(texte or "").rsplit(",", 2)]
+    if len(morceaux) == 3:
+        return morceaux[2], morceaux[1], morceaux[0]
+    if len(morceaux) == 2:
+        return morceaux[1], morceaux[0], ""
+    return morceaux[0], "", ""
+
+
 # ============================================================
 # LECTURE EXCEL — DÉTECTION INTELLIGENTE
 # ============================================================
 
-def read_all_sheets(filepath):
+_NOMS_ROLES = {
+    "orig_pays": "Pays départ", "orig_cp": "CP départ", "orig_ville": "Ville départ",
+    "dest_pays": "Pays destination", "dest_cp": "CP destination", "dest_ville": "Ville destination",
+}
+
+
+def read_all_sheets(filepath, rapport=None):
+    """Retourne (wb, {feuille: (ws, routes)}).
+
+    Les valeurs sont lues dans une copie « data_only » (résultat des formules, pas
+    « =A2 ») ; le classeur rendu garde ses formules pour l'écriture.
+    Si `rapport` est une liste, chaque feuille y ajoute
+    {feuille, lue, raison, colonnes, ligne_entetes, trajets}.
+    """
     wb = openpyxl.load_workbook(filepath)
+    try:
+        wb_val = openpyxl.load_workbook(filepath, data_only=True)
+    except Exception:
+        wb_val = wb
     sheets_data = {}
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
+        wv = wb_val[sheet_name]
+        info = {"feuille": sheet_name, "lue": False, "raison": "", "colonnes": {},
+                "ligne_entetes": None, "trajets": 0}
+        if rapport is not None:
+            rapport.append(info)
 
         # ── Détection intelligente ────────────────────────────────────────
-        result = map_columns(ws)
-        if result[0] is None:
+        mapping, header_row, data_start_row = map_columns(wv)
+        if mapping is None:
+            info["raison"] = "en-têtes non reconnus (il faut au moins Pays / CP / Ville ou Localité)"
             print(f"  ⚠️  Feuille '{sheet_name}' ignorée [headers non détectés]")
             continue
 
-        mapping, header_row, data_start_row = result
-
-        # Vérification minimale
+        info["ligne_entetes"] = header_row
+        info["colonnes"] = {_NOMS_ROLES[k]: f"{get_column_letter(c)} ({wv.cell(row=header_row, column=c).value})"
+                            for k, c in mapping.items()}
         has_orig = any(k.startswith("orig_") for k in mapping)
         has_dest = any(k.startswith("dest_") for k in mapping)
-
         if not has_orig or not has_dest:
-            print(f"  ⚠️  Feuille '{sheet_name}' ignorée [orig={has_orig}, dest={has_dest}]")
-            print(f"       Mapping: {mapping}")
+            info["raison"] = ("colonnes de départ introuvables" if not has_orig
+                              else "colonnes de destination introuvables")
+            print(f"  ⚠️  Feuille '{sheet_name}' ignorée [orig={has_orig}, dest={has_dest}] Mapping: {mapping}")
             continue
 
-        print(f"  ✅ Feuille '{sheet_name}' — headers ligne {header_row}")
-        print(f"       Mapping: {mapping}")
+        print(f"  ✅ Feuille '{sheet_name}' — headers ligne {header_row} Mapping: {mapping}")
+
+        def val(row, role):
+            return wv.cell(row=row, column=mapping[role]).value if role in mapping else None
 
         # ── Lecture des routes ────────────────────────────────────────────
         routes       = []
         lignes_vides = 0
 
-        for row in range(data_start_row, ws.max_row + 6):
-            # Lecture origine
-            orig_pays_raw = ws.cell(row=row, column=mapping["orig_pays"]).value   if "orig_pays"  in mapping else None
-            orig_cp_raw   = ws.cell(row=row, column=mapping["orig_cp"]).value     if "orig_cp"    in mapping else None
-            orig_city_raw = ws.cell(row=row, column=mapping["orig_ville"]).value  if "orig_ville" in mapping else None
+        for row in range(data_start_row, wv.max_row + 6):
+            orig_pays_raw, orig_cp_raw, orig_city_raw = val(row, "orig_pays"), val(row, "orig_cp"), val(row, "orig_ville")
+            dest_pays_raw, dest_cp_raw, dest_city_raw = val(row, "dest_pays"), val(row, "dest_cp"), val(row, "dest_ville")
 
-            # Lecture destination
-            dest_pays_raw = ws.cell(row=row, column=mapping["dest_pays"]).value   if "dest_pays"  in mapping else None
-            dest_cp_raw   = ws.cell(row=row, column=mapping["dest_cp"]).value     if "dest_cp"    in mapping else None
-            dest_city_raw = ws.cell(row=row, column=mapping["dest_ville"]).value  if "dest_ville" in mapping else None
-
-            # Ligne vide ?
-            if not orig_pays_raw and not dest_pays_raw and not orig_city_raw and not dest_city_raw:
+            # Ligne vide ? (le CP compte aussi : fichiers « pays + CP » sans ville)
+            if not any(v not in (None, "") for v in (orig_pays_raw, orig_cp_raw, orig_city_raw,
+                                                      dest_pays_raw, dest_cp_raw, dest_city_raw)):
                 lignes_vides += 1
                 if lignes_vides >= 3:
                     break
                 continue
-
             lignes_vides = 0
 
-            # En-tête parasite ?
             all_vals = [orig_pays_raw, orig_cp_raw, orig_city_raw,
                         dest_pays_raw, dest_cp_raw, dest_city_raw]
             if is_header_row_data(all_vals):
                 print(f"  ⏭️  Ligne {row} ignorée (en-tête parasite)")
                 continue
 
-            # ── Parse origine ─────────────────────────────────────────────
-            origin = parse_origin_from_parts(
-                str(orig_city_raw or "").strip(),
-                str(orig_cp_raw   or "").strip(),
-                str(orig_pays_raw or "").strip(),
-            )
-
-            # ── Parse destination ─────────────────────────────────────────
-            dest = parse_destination(
-                dest_city_raw,
-                dest_cp_raw,
-                dest_pays_raw,
-            )
-
+            origin = parse_origin_from_parts(orig_city_raw, orig_cp_raw, orig_pays_raw)
+            dest = parse_destination(dest_city_raw, dest_cp_raw, dest_pays_raw)
             if not origin or not dest:
                 continue
 
-            label = (f"{orig_city_raw or orig_pays_raw} ({orig_cp_raw or ''}) "
-                     f"→ {dest_city_raw or 'Zone'} ({dest_cp_raw or ''})")
+            label = (f"{orig_city_raw or orig_pays_raw} ({cp_texte(orig_cp_raw)}) "
+                     f"→ {dest_city_raw or 'Zone'} ({cp_texte(dest_cp_raw)})")
 
             routes.append({
                 "row":    row,
                 "origin": origin,
                 "dest":   dest,
                 "label":  label,
+                # saisie d'origine, pour les contrôles (pays incohérent, CP corrigé…)
+                "saisie_origine": " ".join(cp_texte(v) for v in (orig_pays_raw, orig_cp_raw, orig_city_raw) if v not in (None, "")),
+                "saisie_dest":    " ".join(cp_texte(v) for v in (dest_pays_raw, dest_cp_raw, dest_city_raw) if v not in (None, "")),
+                # pas de localité saisie : le point vient du CP / d'une zone (ZONE_CORRECTIONS, chef-lieu belge)
+                "sans_lieu_origine": not str(orig_city_raw or "").strip(),
+                "sans_lieu_dest": str(dest_city_raw or "").strip().lower() in ("", "all", "all cities"),
             })
 
+        info["trajets"] = len(routes)
         if routes:
+            info["lue"] = True
             sheets_data[sheet_name] = (ws, routes)
             print(f"     → {len(routes)} route(s) extraite(s)")
         else:
+            info["raison"] = "aucune ligne exploitable sous les en-têtes"
             print(f"  ⚠️  Feuille '{sheet_name}' : aucune route valide")
 
     return wb, sheets_data
@@ -614,7 +682,8 @@ def unmerge_and_write(ws, row, col, value, font=None, fill=None, alignment=None,
                 merge_range.min_col <= col <= merge_range.max_col):
             ws.unmerge_cells(str(merge_range))
             break
-    cell = ws.cell(row=row, column=col, value=value)
+    cell = ws.cell(row=row, column=col)
+    cell.value = value            # ws.cell(value=None) n'efface pas : on affecte explicitement
     if font:      cell.font      = font
     if fill:      cell.fill      = fill
     if alignment: cell.alignment = alignment
@@ -639,13 +708,24 @@ def find_safe_col(ws, header_row, start_col):
             col += 1
 
 
-def write_km_results(ws, results, calculer_peage=False):
-    # Détecte le header_row dynamiquement
-    detected = detect_header_row(ws)
-    header_row = detected if detected else 1
+COULEURS_STATUT = {"OK": "E2EFDA", "À vérifier": "FFF2CC", "Erreur": "F8CBAD"}
 
-    raw_start  = find_first_empty_column(ws, header_row=header_row)
-    safe_start = find_safe_col(ws, header_row, raw_start)
+
+def _colonne_existante(ws, header_row, titre):
+    for col in range(1, ws.max_column + 1):
+        v = ws.cell(row=header_row, column=col).value
+        if v is not None and str(v).strip() == titre:
+            return col
+    return None
+
+
+def write_km_results(ws, results, calculer_peage=False, header_row=None):
+    """Écrit KM PTV / Carte PTV / Péage, plus Statut et Contrôle quand les résultats
+    en portent. Relancé sur un fichier déjà traité : les colonnes existantes sont
+    réutilisées au lieu d'en ajouter de nouvelles."""
+    if header_row is None:
+        detected = detect_header_row(ws)
+        header_row = detected if detected else 1
 
     header_font  = Font(bold=True, color="FFFFFF")
     header_fill  = PatternFill("solid", fgColor="2F5496")
@@ -655,17 +735,29 @@ def write_km_results(ws, results, calculer_peage=False):
         top=Side(style="thin"),   bottom=Side(style="thin"),
     )
 
+    avec_statut = any(r and "statut" in r for r in results)
     headers = ["KM PTV", "Carte PTV"]
     if calculer_peage:
         headers.append("Péage (€)")
+    if avec_statut:
+        headers += ["Statut", "Contrôle"]
 
     col_map = {}
-    for i, h in enumerate(headers):
-        target_col = find_safe_col(ws, header_row, safe_start + i)
-        unmerge_and_write(ws, header_row, target_col, h,
-                          font=header_font, fill=header_fill,
+    prochaine = None
+    for h in headers:
+        col = _colonne_existante(ws, header_row, h)
+        if col is None:
+            if prochaine is None:
+                raw_start = find_first_empty_column(ws, header_row=header_row)
+                prochaine = find_safe_col(ws, header_row, raw_start)
+            col = find_safe_col(ws, header_row, prochaine)
+            prochaine = col + 1
+        unmerge_and_write(ws, header_row, col, h, font=header_font, fill=header_fill,
                           alignment=header_align, border=border)
-        col_map[h] = target_col
+        col_map[h] = col
+    if avec_statut:
+        ws.column_dimensions[get_column_letter(col_map["Contrôle"])].width = 70
+        ws.column_dimensions[get_column_letter(col_map["Statut"])].width = 12
 
     link_font = Font(color="0563C1", underline="single")
 
@@ -674,26 +766,27 @@ def write_km_results(ws, results, calculer_peage=False):
             continue
         row  = r["row"]
         data = r.get("data")
-        if not data:
-            continue
 
-        unmerge_and_write(ws, row, col_map["KM PTV"], data["km"], border=border)
+        # on vide d'abord (relance sur un fichier déjà traité)
+        for h in headers:
+            if h not in ("Statut", "Contrôle"):
+                c = unmerge_and_write(ws, row, col_map[h], None, border=border)
+                c.hyperlink = None
 
-        carte_url = data.get("map_url", "")
-        if carte_url:
-            cell = unmerge_and_write(
-                ws, row, col_map["Carte PTV"],
-                "🗺️ Voir carte",
-                font=link_font, border=border,
-            )
-            cell.hyperlink = carte_url
-            cell.style = "Hyperlink"
-        else:
-            unmerge_and_write(ws, row, col_map["Carte PTV"], "", border=border)
+        if data:
+            unmerge_and_write(ws, row, col_map["KM PTV"], data["km"], border=border)
+            carte_url = data.get("map_url", "")
+            if carte_url:
+                cell = unmerge_and_write(ws, row, col_map["Carte PTV"], "Voir carte")
+                cell.hyperlink = carte_url
+                cell.font = link_font
+                cell.border = border
+            if calculer_peage:
+                unmerge_and_write(ws, row, col_map["Péage (€)"], data.get("prix_peage", 0.0), border=border)
 
-        if calculer_peage:
-            unmerge_and_write(
-                ws, row, col_map["Péage (€)"],
-                data.get("prix_peage", 0.0),
-                border=border,
-            )
+        if avec_statut:
+            statut = r.get("statut", "OK" if data else "Erreur")
+            c = unmerge_and_write(ws, row, col_map["Statut"], statut, border=border)
+            c.fill = PatternFill("solid", fgColor=COULEURS_STATUT.get(statut, "FFFFFF"))
+            unmerge_and_write(ws, row, col_map["Contrôle"], r.get("controle", "") or None, border=border,
+                              alignment=Alignment(wrap_text=False))

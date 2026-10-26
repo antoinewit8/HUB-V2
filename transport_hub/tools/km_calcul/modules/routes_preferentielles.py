@@ -4,6 +4,9 @@ import math
 import html
 import unicodedata
 import re
+import importlib.util
+import sys
+import threading
 import requests
 from modules.villes_jalons import detecter_villes_jalons
 
@@ -42,12 +45,19 @@ def charger_cache() -> dict:
             return {}
     return {}
 
+_cache_lock = threading.Lock()
+
+
 def sauvegarder_cache(cache: dict) -> None:
-    try:
-        with open(CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-    except IOError as e:
-        print(f"⚠️ Impossible de sauvegarder le cache : {e}")
+    """Écriture atomique sous verrou : deux calculs en parallèle ne corrompent plus le fichier."""
+    with _cache_lock:
+        try:
+            tmp = CACHE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(dict(cache), f, ensure_ascii=False, indent=2)
+            os.replace(tmp, CACHE_PATH)
+        except (IOError, OSError) as e:
+            print(f"⚠️ Impossible de sauvegarder le cache : {e}")
 
 _geocache: dict = charger_cache()
 
@@ -55,6 +65,17 @@ _geocache: dict = charger_cache()
 # CHARGEMENT JSON (une seule fois)
 # ==========================================
 _routes_cache: list | None = None
+_routes_signature = None
+
+
+def _signature_fichiers():
+    sig = []
+    for p in _candidate_apprises_paths() + [JSON_PATH]:
+        try:
+            sig.append((os.path.abspath(p), os.path.getmtime(p)))
+        except OSError:
+            pass
+    return tuple(sig)
 
 def _load_json_list(path: str):
     """Charge un fichier JSON attendu comme liste. None si absent, [] si illisible."""
@@ -84,9 +105,13 @@ def _normalize_route_entry(r: dict):
     return entry
 
 def charger_routes() -> list:
-    global _routes_cache
-    if _routes_cache is not None:
+    """Routes apprises + préférentielles ; relues si un des fichiers a changé
+    (une route ajoutée est prise en compte sans redémarrer le hub)."""
+    global _routes_cache, _routes_signature
+    sig = _signature_fichiers()
+    if _routes_cache is not None and sig == _routes_signature:
         return _routes_cache
+    _routes_signature = sig
 
     routes: list = []
 
@@ -141,7 +166,56 @@ def normalize(text: str) -> str:
 # ==========================================
 # GÉOCODAGE PTV
 # ==========================================
+_geo_lock = threading.Lock()
+
+
+def _geo():
+    mod = sys.modules.get("km_geo_offline")
+    if mod is not None:
+        return mod
+    with _geo_lock:
+        mod = sys.modules.get("km_geo_offline")
+        if mod is None:
+            chemin = os.path.join(BASE_DIR, "geo_offline.py")
+            spec = importlib.util.spec_from_file_location("km_geo_offline", chemin)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod = sys.modules.setdefault("km_geo_offline", mod)
+    return mod
+
+
+def _geocoder_hors_ligne(ville: str):
+    """« Ville, CP, Pays » → (lat, lon) par la table CP. Nom seul (« Reims » dans
+    routes_preferentielles.json) : localité unique en France. None sinon."""
+    try:
+        g = _geo()
+        m = g.decouper(ville)
+        if m:
+            # point de référence d'une route apprise : sert au rapprochement à 50 km,
+            # un CP approximatif suffit (ex. « Beneden-Leeuwen, 6588 » au lieu de 6658)
+            r = g.localiser(g.iso_pays(m[0]), m[1], m[2])
+            return (r["lat"], r["lon"]) if r else None
+        if "," not in ville and not re.search(r"\d", ville):
+            ex = g.table()
+            ex._pays("FR")
+            pts = [(e[2], e[3]) for e in ex.par_lieu.get(("FR", g.norm_lieu(ville)), [])]
+            c = ex._groupe(pts, rayon=25)
+            if c:
+                return c
+    except Exception as e:
+        print(f"      ⚠️ table CP indisponible : {e}")
+    return None
+
+
+_echecs: set = set()      # lieux introuvables : pas de nouvel appel PTV à chaque trajet
+
+
 def geocoder_ville(ville: str) -> tuple[float, float] | None:
+    c = _geocoder_hors_ligne(ville)
+    if c:
+        return c
+    if ville in _echecs:
+        return None
     ville_clean = ville
     ville_clean = re.sub(r'\bST\b', 'SAINT', ville_clean, flags=re.IGNORECASE)
     ville_clean = re.sub(r'\bSTE\b', 'SAINTE', ville_clean, flags=re.IGNORECASE)
@@ -196,6 +270,7 @@ def geocoder_ville(ville: str) -> tuple[float, float] | None:
 
         if not locations:
             print(f"      ⚠️ Aucun résultat géocodage pour '{ville}'")
+            _echecs.add(ville)
             return None
 
         ville_nom_norm = normalize(city_name)
@@ -289,8 +364,9 @@ def geocoder_ville(ville: str) -> tuple[float, float] | None:
         print(f"      📍 Géocodé '{ville}' → ({lat:.4f}, {lon:.4f})")
         return (lat, lon)
 
-    except requests.RequestException as e:
+    except Exception as e:
         print(f"      ⚠️ Erreur géocodage PTV '{ville}' : {e}")
+        _echecs.add(ville)
         return None
 
 
@@ -323,12 +399,15 @@ def _extract_prohibited(route: dict) -> list:
         raw = [c for c in raw.replace(";", ",").split(",")]
     return [str(c).strip().upper() for c in raw if str(c).strip()]
 
-def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> dict:
-    """Retourne {"waypoints": [...], "prohibited_countries": [...]} pour une route apprise.
+def get_waypoints(origin: str, dest: str, auto_jalons: bool = False,
+                  coords_origin=None, coords_dest=None) -> dict:
+    """Retourne {"waypoints": [...], "prohibited_countries": [...], "route": "..."} pour une route apprise.
 
     - Match exact (texte) et match par proximité GPS : TOUJOURS appliqués.
     - Détection automatique de villes-jalons : UNIQUEMENT si auto_jalons=True
       (mode SUPER), car elle peut introduire des détours.
+    - coords_origin / coords_dest : points déjà géocodés par l'appelant (évite
+      de les géocoder une seconde fois, avec une autre méthode).
     """
     routes = charger_routes()
     norm_origin = normalize(origin)
@@ -344,11 +423,14 @@ def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> dict:
             prohibited = _extract_prohibited(route)
             print(f"   ✅ Route apprise (match exact) : {origine_ref} → {dest_ref} "
                   f"({len(waypoints)} waypoints, pays interdits: {prohibited or 'aucun'})")
-            return {"waypoints": waypoints, "prohibited_countries": prohibited}
+            return {"waypoints": waypoints, "prohibited_countries": prohibited,
+                    "route": f"{origine_ref} → {dest_ref}", "km_reference": route.get("km_reference")}
 
-    # ── 2. Match par proximité GPS (50 km) — géocodage seulement maintenant ──
-    coords_origin = geocoder_ville(origin)
-    coords_dest   = geocoder_ville(dest)
+    # ── 2. Match par proximité GPS (50 km) ──
+    if coords_origin is None:
+        coords_origin = geocoder_ville(origin)
+    if coords_dest is None:
+        coords_dest = geocoder_ville(dest)
     mots_origin   = set(norm_origin.split())
     mots_dest     = set(norm_dest.split())
 
@@ -394,7 +476,8 @@ def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> dict:
             prohibited = _extract_prohibited(route)
             print(f"   ✅ Route apprise (proximité <{RAYON_KM}km) : {origine_ref} → {dest_ref} "
                   f"({len(waypoints)} waypoints, pays interdits: {prohibited or 'aucun'})")
-            return {"waypoints": waypoints, "prohibited_countries": prohibited}
+            return {"waypoints": waypoints, "prohibited_countries": prohibited,
+                    "route": f"{origine_ref} → {dest_ref} (à moins de {RAYON_KM} km)"}
 
     # ── 3. Détection automatique villes-jalons — UNIQUEMENT en mode SUPER ──
     if auto_jalons and coords_origin and coords_dest:
@@ -405,7 +488,7 @@ def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> dict:
         )
         if jalons:
             print(f"   ✅ {len(jalons)} villes-jalons détectées automatiquement")
-            return {"waypoints": jalons, "prohibited_countries": []}
+            return {"waypoints": jalons, "prohibited_countries": [], "route": f"{len(jalons)} villes-jalons"}
 
     print(f"   📍 Aucune route apprise → PTV choisit le trajet")
     return {"waypoints": [], "prohibited_countries": []}

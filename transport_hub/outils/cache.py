@@ -29,6 +29,8 @@ def afficher_taille(path: Path) -> str:
         if not contenu:
             return f"vide ({taille})"
         data = json.loads(contenu)
+        if isinstance(data, dict) and "version" in data:       # format v2 : {"version": 2, "trajets"|"lieux": {...}}
+            data = next((v for k, v in data.items() if k != "version" and isinstance(v, dict)), {})
         nb = len(data) if isinstance(data, (dict, list)) else "?"
         return f"{nb} entrées ({taille})"
     except json.JSONDecodeError:
