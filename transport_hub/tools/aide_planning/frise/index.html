@@ -43,6 +43,9 @@
            height: 22px; line-height: 19px; font-size: 10.5px; text-align: center; }
   .seg.l { background: var(--lav); color: #fff; top: 13px; height: 26px; line-height: 26px; font-size: 10.5px; padding: 0 6px; }
   .seg.a { background: #d1d1d6; color: #3a3a3c; top: 13px; height: 26px; line-height: 26px; font-size: 10.5px; padding: 0 6px; }
+  .seg.g { background: #f2f7fe; border: 1.5px dashed #0071e3; color: #0058b0; cursor: pointer; font-weight: 500;
+           line-height: 29px; transition: background .12s; }
+  .seg.g:hover, .seg.g.sel { background: #e1edfc; z-index: 2; }
   .seg.o { top: 6px; height: 40px; line-height: 40px; color: var(--orange); font-weight: 500; text-align: center;
            background: repeating-linear-gradient(45deg, #f6e3c7 0 6px, #fff6ea 6px 12px); }
   .maint { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff3b30; opacity: .7; z-index: 4; pointer-events: none; }
@@ -63,6 +66,7 @@
     <span><i style="background:#30a2c8"></i>lavage</span>
     <span><i style="background:#d1d1d6"></i>autre activité</span>
     <span><i style="background:repeating-linear-gradient(45deg,#f6e3c7 0 4px,#fff6ea 4px 8px)"></i>jour ouvré sans activité</span>
+    <span><i style="background:#f2f7fe;border:1.5px dashed #0071e3;height:8px"></i>libre ensuite · recharge possible</span>
   </div>
 </div>
 <div class="tip" id="tip"></div>
@@ -112,7 +116,8 @@
       jours.forEach(function (j) { f.appendChild(el("div", j.we ? "we" : "")); });
       p.appendChild(f);
       (l.segs || []).forEach(function (s) {
-        var b = el(s.k === "c" ? "button" : "div", "seg " + s.k + (s.id && s.id === args.sel ? " sel" : ""), s.label);
+        var cliquable = (s.k === "c" || s.k === "g");
+        var b = el(cliquable ? "button" : "div", "seg " + s.k + (s.id && s.id === args.sel ? " sel" : ""), s.label);
         pos(b, s.a, s.b);
         b.addEventListener("mouseenter", function () { tip.textContent = s.titre || s.label; tip.style.opacity = 1; });
         b.addEventListener("mousemove", function (ev) {
@@ -120,11 +125,11 @@
           tip.style.left = x + "px"; tip.style.top = (ev.clientY + 16) + "px";
         });
         b.addEventListener("mouseleave", function () { tip.style.opacity = 0; });
-        if (s.k === "c") {
+        if (cliquable) {
           b.type = "button";
           b.setAttribute("aria-label", s.titre || s.label);
           b.addEventListener("click", function () {
-            document.querySelectorAll(".seg.c.sel").forEach(function (x) { x.classList.remove("sel"); });
+            document.querySelectorAll(".seg.sel").forEach(function (x) { x.classList.remove("sel"); });
             b.classList.add("sel");
             envoyer("streamlit:setComponentValue", { value: { dossier: s.id, t: Date.now() }, dataType: "json" });
           });

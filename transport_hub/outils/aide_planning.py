@@ -72,6 +72,41 @@ st.markdown("""
 .ap-vide { background:#fff; border-radius:18px; padding:28px 20px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06);
   color:#6e6e73; font-size:14px; text-align:center; }
 
+/* Et après ? */
+.ap-suite { background:#fff; border-radius:18px; padding:14px 18px; margin-top:10px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06); }
+.ap-suite.libre { background:#f2f7fe; box-shadow:0 0 0 1.5px #0071e3 inset; }
+.ap-suite .eye { font-size:12px; color:#6e6e73; margin:0 0 4px; font-weight:600; }
+.ap-suite .l { font-size:15px; font-weight:600; color:#1d1d1f; }
+.ap-suite .s { font-size:12.5px; color:#6e6e73; }
+.ap-suite ul { list-style:none; margin:0; padding:0; }
+.ap-suite li { padding:7px 0; border-top:1px solid rgba(0,113,227,.15); font-size:13px; }
+.ap-suite li b { display:block; font-weight:600; color:#1d1d1f; }
+.ap-suite li span { color:#6e6e73; font-size:12px; }
+
+/* À placer */
+.ap-cmds { display:grid; grid-template-columns:repeat(auto-fill,minmax(420px,1fr)); gap:12px; }
+.ap-cmd { background:#fff; border-radius:18px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06); overflow:hidden; }
+.ap-cmd-h { display:flex; justify-content:space-between; gap:12px; padding:14px 18px 12px; border-bottom:1px solid #f0f0f3; }
+.ap-cmd-h .eye { font-size:12px; color:#6e6e73; margin:0 0 3px; }
+.ap-cmd-h .t { font-size:17px; font-weight:600; letter-spacing:-0.01em; color:#1d1d1f; }
+.ap-cmd-h .t span { font-size:12px; color:#6e6e73; font-weight:500; }
+.ap-cmd-h .q { font-size:12px; color:#6e6e73; text-align:right; white-space:nowrap; }
+.ap-cmd-h .q b { color:#248a3d; font-size:13px; }
+.ap-cand { display:grid; grid-template-columns:110px minmax(0,1fr) auto; gap:10px; align-items:center; padding:10px 18px;
+  border-bottom:1px solid #f5f5f7; font-size:13px; }
+.ap-cand:last-child { border-bottom:0; }
+.ap-cand.best { background:#f2faf4; }
+.ap-cand .r { font-weight:600; color:#1d1d1f; }
+.ap-cand .s { font-size:11.5px; color:#6e6e73; font-weight:400; }
+.ap-cand .l { color:#1d1d1f; }
+.ap-cand .k { text-align:right; white-space:nowrap; color:#6e6e73; font-size:12px; }
+.ap-cand .k b { color:#1d1d1f; font-size:14px; }
+.ap-cand .k span { font-size:11.5px; }
+.ap-cand .tag { display:inline-block; margin-top:3px; font-size:11px; background:#f0f0f3; color:#6e6e73; padding:2px 8px; border-radius:980px; }
+.ap-cand .tag.tra { background:#fff3e5; color:#b25000; margin:0; }
+.ap-cand.vide, .ap-cand.plus { display:block; color:#6e6e73; font-size:12.5px; }
+
 /* Regroupements */
 .ap-groupes { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:12px; }
 .ap-groupe { background:#fff; border-radius:18px; padding:16px 18px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.06); }
@@ -630,6 +665,7 @@ def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
 import datetime as _dtm  # noqa: E402
 
 from tools.aide_planning import planeur as PL  # noqa: E402
+from tools.aide_planning import suites as SU  # noqa: E402
 from tools.aide_planning.composant import frise as _FRISE  # noqa: E402
 
 ui.page("aide_planning", "Le planning de la flotte d’un coup d’œil : qui charge, qui décharge, qui roule à vide, "
@@ -685,10 +721,50 @@ def _preparer(cle, _df):
     return coords, t, autres, legs
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def _prix(cle_ca, _contenu, cle, _index):
+    """Prix par dossier depuis un fichier CA (facultatif) : sert à la renta des suggestions."""
+    from tools.werbomont import engine as _E
+    try:
+        ca = _E.preparer_ca(pd.read_excel(io.BytesIO(_contenu)))
+    except Exception as e:
+        return {}, f"Fichier CA non reconnu : {e}"
+    pm = dict(zip(ca["dossier"], ca["prix"]))
+    prix = {d: pm.get(_E.norm_dossier(d)) for d in _index}
+    n = sum(1 for v in prix.values() if v is not None and v == v)
+    return prix, ("" if n else "Aucun dossier du CA ne correspond à l’export.")
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _suites(cle, cle_ca, dim, _t, _autres, _coords, _prix):
+    """Créneaux libres de chaque ressource, historique des rechargements, « libre ensuite »."""
+    col = PL.DIMS[dim]
+    cren = SU.creneaux(_t, _autres, _coords, col)
+    hist = SU.historique(_t, _autres, _coords, _prix)
+    fins = {}
+    if not cren.empty:
+        for r in cren[cren["jusqua"].isna()].itertuples():
+            sugs = SU.suggestions(hist, r.point, metier_=r.metier)
+            fins[r.ressource] = {"libre": r.libre, "lieu": r.lieu, "dossier": r.apres, "point": r.point,
+                                 "sugs": sugs, "textes": [SU.texte_suggestion(x) for x in sugs]}
+    return cren, hist, fins
+
+
 @st.cache_data(show_spinner=False, max_entries=32)
-def _vue(cle, filtres, dim, t0, t1, couverture, _t, _autres, _act, _coords):
+def _vue(cle, cle_ca, filtres, dim, t0, t1, couverture, _t, _autres, _act, _coords, _fins):
     """Une fois par période / filtre : frise, ressources, indicateurs."""
-    return PL.vue(_t, _autres, _act, dim, t0, t1, _coords, couverture=couverture)
+    return PL.vue(_t, _autres, _act, dim, t0, t1, _coords, couverture=couverture, fins=_fins)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _placer(cle, cle_ca, dim, t0, t1, metier_, flotte_, _t, _cren, _coords):
+    t = _t
+    if metier_ != "Tous":
+        t = t[t["type_tr"].str.upper().str.contains({"Plateau": "PLA", "Citerne": "CIT"}[metier_], na=False)]
+    cren = _cren
+    if flotte_ == "Tractionnaires" and not cren.empty:
+        cren = cren[cren["tra"]]
+    return SU.a_placer(t, cren, _coords, t0, t1, inclure_tra=(flotte_ != "Flotte CB"))
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -701,6 +777,9 @@ def _excel(cle, _table):
 import hashlib as _hashlib  # noqa: E402
 CLE = _hashlib.md5(st.session_state["ap_fichier"][1]).hexdigest()
 COORDS, T_ALL, AUTRES, legs = _preparer(CLE, df)
+_ca = st.session_state.get("ap_ca") or st.session_state.get("tv_fichiers", {}).get("ca")
+CLE_CA = _hashlib.md5(_ca[1]).hexdigest() if _ca else ""
+PRIX, _ERR_CA = _prix(CLE_CA, _ca[1], CLE, list(T_ALL.index)) if _ca else ({}, "")
 _dd = df["date"].dropna()
 dmin, dmax = _dd.min().date(), _dd.max().date()
 
@@ -708,13 +787,21 @@ fb1, fb2, fb3 = st.columns([6, 1.2, 1.4], vertical_alignment="center")
 fb1.markdown(
     f'<div class="ap-fichier"><i>XL</i><b>{_esc(st.session_state["ap_fichier"][0])}</b>'
     f'<span>{dmin:%d/%m/%Y} → {dmax:%d/%m/%Y} · {_nb(df["dossier"].nunique())} dossiers · '
-    f'{_nb(len(df))} activités</span></div>', unsafe_allow_html=True)
+    f'{_nb(len(df))} activités' + (f' · CA : {_esc(_ca[0])}' if _ca else "") + '</span></div>', unsafe_allow_html=True)
 with fb2.popover("Changer", use_container_width=True):
     if _uploader("ap_up2"):
         st.rerun()
     if st.button("Retirer le fichier", key="ap_rm"):
         st.session_state.pop("ap_fichier", None)
         st.rerun()
+    st.divider()
+    f_ca = st.file_uploader("Chiffre d’affaires (facultatif)", type=["xlsx", "xls"], key="ap_up_ca",
+                            help="Export CA (N° Dossier, Prix transport) : ajoute la renta aux suggestions de rechargement.")
+    if f_ca is not None and (not st.session_state.get("ap_ca") or st.session_state["ap_ca"][0] != f_ca.name):
+        st.session_state["ap_ca"] = (f_ca.name, f_ca.getvalue())
+        st.rerun()
+    if _ca:
+        st.caption(f"CA utilisé : {_ca[0]}" + (f" — {_ERR_CA}" if _ERR_CA else ""))
 with fb3.popover("Données lues", use_container_width=True):
     st.markdown(f"**Colonnes reconnues** — format de date : {DATE_ORDER}")
     st.dataframe(pd.DataFrame([{"Champ": k, "Colonne du fichier": v or "—"} for k, v in COLS.items()]),
@@ -798,7 +885,9 @@ if metier != "Tous":
     T = T[T["type_tr"].str.upper().str.contains({"Plateau": "PLA", "Citerne": "CIT"}[metier], na=False)]
 if sel:
     T = T[T[dim_col].isin(sel)]
-V = _vue(CLE, (flotte, metier, tuple(sel)), dimension, t0, t1, (dmin, dmax), T, AUTRES, df_scope, COORDS)
+CREN, HIST, FINS = _suites(CLE, CLE_CA, dimension, T_ALL, AUTRES, COORDS, PRIX)
+V = _vue(CLE, CLE_CA, (flotte, metier, tuple(sel)), dimension, t0, t1, (dmin, dmax), T, AUTRES, df_scope, COORDS, FINS)
+PLACER = _placer(CLE, CLE_CA, dimension, t0, t1, metier, flotte, T_ALL, CREN, COORDS)
 synthese = V["synthese"]
 
 # ─── Indicateurs ─────────────────────────────────────────────────────────────
@@ -820,7 +909,9 @@ if dfx.empty:
     st.stop()
 
 # ─── Onglets ─────────────────────────────────────────────────────────────────
-t_plan, t_carte, t_res, t_grp, t_tab = st.tabs(["Planning", "Carte", "Ressources", "Regroupements", "Tableau"])
+_n_pl = len(PLACER)
+t_plan, t_place, t_carte, t_res, t_grp, t_tab = st.tabs(
+    ["Planning", f"À placer ({_n_pl})" if _n_pl else "À placer", "Carte", "Ressources", "Regroupements", "Tableau"])
 
 @st.fragment
 def _onglet_planning():
@@ -840,7 +931,8 @@ def _onglet_planning():
     with c_fiche:
         det = PL.fiche(T_ALL, AUTRES, str(ss.get("ap_sel") or ""), COORDS)
         if not det:
-            st.markdown('<div class="ap-vide">Cliquez une barre bleue du planning pour voir le dossier.</div>',
+            st.markdown('<div class="ap-vide">Cliquez une barre du planning pour voir le dossier et sa suite. '
+                        'Les barres en pointillés bleus montrent où chaque camion se libère.</div>',
                         unsafe_allow_html=True)
         else:
             tags = "".join(f"<span>{_esc(x)}</span>" for x in (det["chauffeur"], det["tracteur"], det["produit"]) if x)
@@ -866,6 +958,34 @@ def _onglet_planning():
                 f'<div class="ap-fiche"><p class="eye">Dossier {_esc(det["dossier"])} · {_esc(det["remorque"])}{multi}</p>'
                 f'<h3>{_esc(det["charg"] or "?")} → {_esc(det["dech"] or "?")}</h3>{etapes}{autres}'
                 f'<div class="tags">{tags}</div></div>', unsafe_allow_html=True)
+            # ── Et après ? ─────────────────────────────────────────────
+            suite = SU.suite_du_dossier(CREN, det["dossier"])
+            if suite:
+                if suite["suivant"]:
+                    ecart = (suite["jusqua"] - suite["libre"]).total_seconds() / 3600
+                    kv = SU.km(suite["point"], suite["point_suivant"]) if suite["point_suivant"] else float("nan")
+                    st.markdown(
+                        f'<div class="ap-suite"><p class="eye">Ensuite</p>'
+                        f'<div class="l">Dossier {_esc(suite["suivant"])} · chargement à {_esc(suite["lieu_suivant"])}</div>'
+                        f'<div class="s">{PL._heure(suite["jusqua"])} · après {ecart:.0f} h libre'
+                        + (f' et ~{kv:.0f} km à vide' if kv == kv else "") + ' depuis ' + _esc(suite["lieu"]) + '</div></div>',
+                        unsafe_allow_html=True)
+                    if st.button("Voir ce dossier", key="ap_voir_suite", width="stretch"):
+                        ss["ap_sel"] = suite["suivant"]
+                        st.rerun(scope="fragment")
+                else:
+                    sugs = SU.suggestions(HIST, suite["point"], metier_=suite["metier"])
+                    lignes_s = "".join(
+                        f'<li><b>{_esc(x["lieu"])}</b><span>{_esc(SU.texte_suggestion(x).split(" · ", 1)[1])}</span></li>'
+                        for x in sugs)
+                    st.markdown(
+                        f'<div class="ap-suite libre"><p class="eye">Pas encore planifié</p>'
+                        f'<div class="l">Libre {PL._heure(suite["libre"])}</div>'
+                        f'<div class="s">à {_esc(suite["lieu"])}</div>'
+                        + (f'<p class="eye" style="margin-top:12px">Recharges habituelles d’ici</p><ul>{lignes_s}</ul>'
+                           if sugs else '<div class="s" style="margin-top:8px">Pas d’historique de rechargement autour de ce lieu.</div>')
+                        + ("" if PRIX else '<div class="s" style="margin-top:6px">Ajoutez le CA (menu « Changer ») pour classer par renta.</div>')
+                        + '</div>', unsafe_allow_html=True)
             if det["dech_point"]:
                 if st.button(f"Où recharger après {det['dech']} ?", key="ap_vers_tv", type="primary",
                              icon=":material/swap_horiz:", width="stretch"):
@@ -876,6 +996,43 @@ def _onglet_planning():
 
 with t_plan:
     _onglet_planning()
+
+with t_place:
+    st.caption("Commandes de l’export sans remorque ni tracteur, chargées sur la période. Pour chacune : les "
+               f"{dimension.lower()}s libres à temps (arrivée estimée à 60 km/h), classées par km à vide ajoutés — "
+               "y compris un trou entre deux dossiers s’il permet de revenir à temps pour le suivant.")
+    if not PLACER:
+        st.markdown('<div class="ap-vide">Aucune commande sans remorque ni tracteur sur cette période. '
+                    'Les dossiers non attribués de l’export apparaîtront ici avec les camions qui peuvent les prendre.</div>',
+                    unsafe_allow_html=True)
+    else:
+        blocs = []
+        for p in PLACER:
+            tete = (f'<div class="ap-cmd-h"><div><p class="eye">Dossier {_esc(p["dossier"])}'
+                    + (f' · {_esc(p["metier"])}' if p["metier"] else "") + (f' · {_esc(p["produit"])}' if p["produit"] else "")
+                    + f'</p><div class="t">{_esc(p["charg"])} <span>{_esc(p["charg_pays"])}</span> → {_esc(p["dech"])} '
+                    f'<span>{_esc(p["dech_pays"])}</span></div></div>'
+                    f'<div class="q">Chargement<br><b>{PL._heure(p["debut"])}</b></div></div>')
+            if not p["localise"]:
+                corps = '<div class="ap-cand vide">Lieu de chargement non localisé.</div>'
+            elif not p["candidats"]:
+                corps = '<div class="ap-cand vide">Aucune ressource libre à temps pour ce chargement.</div>'
+            else:
+                corps = ""
+                for i, c in enumerate(p["candidats"]):
+                    trou = (f'<span class="tag">dans un trou · reprend à {_esc(c["suivant"])} {PL._heure(c["jusqua"])}</span>'
+                            if c["trou"] else "")
+                    tra = '<span class="tag tra">TRA</span>' if c["tra"] else ""
+                    corps += (f'<div class="ap-cand{" best" if i == 0 else ""}"><div class="r">{_esc(c["ressource"])} {tra}'
+                              f'<div class="s">{_esc(c["chauffeur"])}</div></div>'
+                              f'<div><div class="l">Libre {PL._heure(c["libre"])} · {_esc(c["lieu"])}</div>{trou}</div>'
+                              f'<div class="k"><b>~{c["km_vide"]:.0f} km</b> à vide<br><span>'
+                              + (f'marge {c["marge_h"]:.0f} h' if c["marge_h"] >= 0.5 else "juste à l’heure")
+                              + '</span></div></div>')
+                if p["nb_candidats"] > len(p["candidats"]):
+                    corps += f'<div class="ap-cand plus">+ {p["nb_candidats"] - len(p["candidats"])} autre(s) possible(s)</div>'
+            blocs.append(f'<div class="ap-cmd">{tete}{corps}</div>')
+        st.markdown('<div class="ap-cmds">' + "".join(blocs) + "</div>", unsafe_allow_html=True)
 
 @st.fragment
 def _onglet_carte():

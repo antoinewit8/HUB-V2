@@ -180,7 +180,7 @@ def fiche(t: pd.DataFrame, autres: dict, dossier: str, coords: dict) -> dict | N
 
 # ─── Étage 2 : une période, une dimension ───────────────────────────────────
 def vue(t: pd.DataFrame, autres: dict, activites: pd.DataFrame, dim: str, t0, t1, coords: dict,
-        couverture=None, maintenant=None) -> dict:
+        couverture=None, maintenant=None, fins: dict | None = None) -> dict:
     """Frise + tableau des ressources + indicateurs pour [t0, t1[.
 
     `t` : table des dossiers déjà filtrée (flotte, métier, recherche).
@@ -244,6 +244,19 @@ def vue(t: pd.DataFrame, autres: dict, activites: pd.DataFrame, dim: str, t0, t1
                     segs.append({"k": "l" if lav else "a", "a": f(w), "b": f(w + pd.Timedelta(hours=DUREE_AUTRE_H)),
                                  "label": act.title(), "titre": f"{act.title()} · {_court(loc)}\n{_heure(w)}"})
             prec = (dos, x)
+        # « Et après ? » : barre fantôme après le dernier dossier connu
+        fin = (fins or {}).get(r)
+        if fin and t0 - pd.Timedelta(days=1) <= fin["libre"] < t1:
+            a = fin["libre"]
+            sug = fin.get("sugs") or []
+            lab = f"→ {sug[0]['lieu'].split(' (')[0]} ?" if sug else "Libre"
+            titre = f"Libre {_heure(a)} à {fin['lieu']}"
+            if sug:
+                titre += "\nRecharges habituelles d’ici :" + "".join(f"\n• {x}" for x in fin.get("textes", []))
+            else:
+                titre += "\nPas d’historique de rechargement autour de ce lieu."
+            segs.append({"k": "g", "a": f(a), "b": f(min(a + pd.Timedelta(hours=16), t1)), "label": lab,
+                         "titre": titre + "\nCliquer pour les détails", "id": str(fin["dossier"])})
         n_dans = sum(1 for d in grp.index if d in dans_set)
         if r not in jours_actifs and not n_dans:
             continue                      # aucune activité sur la période
@@ -257,8 +270,12 @@ def vue(t: pd.DataFrame, autres: dict, activites: pd.DataFrame, dim: str, t0, t1
             b_ = f(pd.Timestamp(j) + pd.Timedelta(hours=18))
             return any(a1 < b_ and b1 > a_ for a1, b1 in couverts)
         sans = [j for j in ouvres if j not in actifs and not _couvert(j)]
+        fantome = [(x_["a"], x_["b"]) for x_ in segs if x_["k"] == "g"]
         if len(ouvres) and (t1 - t0).days > 1:
             for j in sans:
+                aj, bj = f(pd.Timestamp(j)), f(pd.Timestamp(j) + pd.Timedelta(days=1))
+                if any(a1 < bj and b1 > aj for a1, b1 in fantome):
+                    continue
                 a = pd.Timestamp(j)
                 segs.append({"k": "o", "a": f(a), "b": f(a + pd.Timedelta(days=1)), "label": "sans activité",
                              "titre": f"Aucune activité le {JOURS[a.dayofweek].lower()} {a:%d/%m}"})
@@ -271,7 +288,7 @@ def vue(t: pd.DataFrame, autres: dict, activites: pd.DataFrame, dim: str, t0, t1
         if km_vide:
             sous.append(f"~{km_vide:.0f} km à vide")
         lignes.append({"nom": str(r), "sous": " · ".join(sous), "tra": tra,
-                       "segs": sorted(segs, key=lambda s: {"o": 0, "v": 1, "a": 2, "l": 2, "c": 3}[s["k"]])})
+                       "segs": sorted(segs, key=lambda s: {"o": 0, "v": 1, "a": 2, "l": 2, "g": 3, "c": 4}[s["k"]])})
         synthese.append({
             "Ressource": r, "Dossiers": n_dans, "Jours actifs": len(actifs),
             "Jours ouvrés sans activité": len(sans),
