@@ -78,37 +78,7 @@ def preparer(h_mis: str, h_ca: str, _mis: bytes, _ca: bytes):
     return E.construire_dossiers(m, ca)
 
 
-BORDER_URLS = [
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_boundary_lines_land.geojson",
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson",
-]
-
-
-@st.cache_data(ttl=30 * 86400, show_spinner="Chargement des frontières…")
-def load_borders():
-    """Frontières Natural Earth limitées à l'Europe (même source que la carte des lavages)."""
-    import urllib.request as ureq
-    w, s_, e, n = (-11.0, 35.0, 32.0, 62.0)
-    for url in BORDER_URLS:
-        try:
-            req = ureq.Request(url, headers={"User-Agent": "CB-Transport-Hub/1.0"})
-            with ureq.urlopen(req, timeout=40) as r:
-                data = json.loads(r.read())
-        except Exception:
-            continue
-        lignes = []
-        for f in data.get("features", []):
-            g = f.get("geometry") or {}
-            parts = [g["coordinates"]] if g.get("type") == "LineString" else (
-                g["coordinates"] if g.get("type") == "MultiLineString" else [])
-            for li in parts:
-                if any(w <= p[0] <= e and s_ <= p[1] <= n for p in li):
-                    lignes.append(I._decimer([[p[1], p[0]] for p in li], 0.003))
-        if lignes:
-            lignes = [[[p[1], p[0]] for p in li] for li in lignes]      # retour en [lon, lat] (GeoJSON)
-            return {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {},
-                    "geometry": {"type": "MultiLineString", "coordinates": lignes}}]}
-    raise RuntimeError("frontières indisponibles")
+from core.frontieres import load_borders  # noqa: E402  (fichier local, partagé avec Lavages et Pompes)
 
 
 # ─── Fichiers et paramètres ──────────────────────────────────────────────────

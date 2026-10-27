@@ -5,9 +5,11 @@ Stations carburant partagées entre les pages Pompes carburant et Carte manuelle
 - prix du gazole : flux officiel français (station par station), prix maximum belge
 """
 
+import hashlib
 import io
 import re
 import json
+import urllib.parse as uparse
 import unicodedata
 import urllib.request as ureq
 from pathlib import Path
@@ -30,6 +32,7 @@ EUROPE_BBOX = (-11.0, 35.0, 32.0, 72.0)  # ouest, sud, est, nord (écarte l'outr
 HUB_DIR = Path(__file__).resolve().parents[2]
 FAV_ASSET = HUB_DIR / "assets" / "pompes_favorites.xlsx"          # liste versionnée dans le dépôt
 FAV_LOCAL = HUB_DIR / "data" / "pompes" / "favorites.xlsx"        # liste remplacée depuis la page
+VERSION_LECTURE = 1          # à monter si lire_favorites change : les .json déjà calculés sont alors ignorés
 
 
 # ─── Utilitaires ─────────────────────────────────────────────────────────────
@@ -203,9 +206,31 @@ def fichier_favorites() -> Path | None:
     return None
 
 
+FAV_PRET = FAV_ASSET.with_suffix(".json")        # liste du dépôt déjà lue (voir favorites_depuis)
+
+
 @st.cache_data(show_spinner=False)
 def favorites_depuis(path: str, mtime: float) -> tuple[list, list]:
-    return lire_favorites(Path(path).read_bytes(), path)
+    """Stations de la liste. Lire l'Excel demande la table GeoNames pour deviner le pays (5 à 8 s au premier
+    appel) : le résultat est gardé dans un .json à côté du fichier, réutilisé tant que l'Excel ne change pas
+    (empreinte SHA-1). Le .json de la liste du dépôt est versionné."""
+    contenu = Path(path).read_bytes()
+    empreinte = hashlib.sha1(contenu).hexdigest()
+    pret = Path(path).with_suffix(".json")
+    try:
+        d = json.loads(pret.read_text(encoding="utf-8"))
+        if d.get("sha1") == empreinte and d.get("version") == VERSION_LECTURE:
+            return d["stations"], d["remarques"]
+    except (OSError, ValueError, KeyError):
+        pass
+    stations, remarques = lire_favorites(contenu, path)
+    try:
+        pret.write_text(json.dumps({"version": VERSION_LECTURE, "sha1": empreinte, "stations": stations,
+                                    "remarques": remarques}, ensure_ascii=False, separators=(",", ":")),
+                        encoding="utf-8")
+    except OSError:
+        pass
+    return stations, remarques
 
 
 def _get(url: str, headers: dict, timeout: int = 60) -> bytes:
@@ -349,3 +374,92 @@ def prix_max_belgique():
     if not px:
         raise RuntimeError("gasoil absent du tarif")
     return {"px": round(float(px), 3), "label": t.get("label", "")}
+
+
+# ─── Liste officielle Circle K (API du localisateur de circlek.lu) ──────────
+# Ancien réseau TotalEnergies racheté par Couche-Tard (Circle K) en 2024 :
+# Allemagne et Pays-Bas vendus entièrement ; Belgique et Luxembourg en coentreprise,
+# boutique Circle K mais pompes sous marque TotalEnergies pendant cinq ans.
+CK_API = "https://api.circlek.com/eu/ngrp-tardmap-store-locator/api/v4/pois"
+CK_PAYS = {"BE", "LU", "NL", "DE"}
+CK_POMPE_TOTAL = {"BE", "LU"}
+CK_HEADERS = {**UA, "Accept": "application/json", "Origin": "https://www.circlek.lu", "Referer": "https://www.circlek.lu/"}
+
+
+def _cp_ville(a, b):
+    """L'API inverse parfois code postal et localité : on remet chaque valeur à sa place."""
+    a, b = (a or "").strip(), (b or "").strip()
+    if re.search(r"\d", a) and not re.search(r"\d", b):
+        return a, b
+    if re.search(r"\d", b) and not re.search(r"\d", a):
+        return b, a
+    return a, b
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def circlek_officiel() -> list:
+    """Toutes les stations du localisateur officiel Circle K (BE, LU, NL, DE). Lève une erreur si l'API ne répond pas."""
+    q = uparse.urlencode({
+        "withDetails": "true", "startLatitude": 50.5, "startLongitude": 6.0, "searchLatitude": 50.5,
+        "searchLongitude": 6.0, "maxDistance": 0, "maxPoints": 10000, "filterMode": "API_ITEMS",
+        "requireAllFilterItems": "true",
+    })
+    data = json.loads(_get(f"{CK_API}?{q}", CK_HEADERS).decode("utf-8"))
+    if not isinstance(data, list) or not data:
+        raise RuntimeError("réponse vide")
+    out = []
+    for p in data:
+        cc = (p.get("country") or "").upper()
+        la, lo = p.get("latitude"), p.get("longitude")
+        if cc not in CK_PAYS or la is None or lo is None:
+            continue
+        cp, ville = _cp_ville(p.get("city"), p.get("zip"))
+        marque = (p.get("brand") or "").upper()
+        fuel = next((h for h in p.get("schedule") or [] if h.get("type") == "openingTimesFuel"), {})
+        h24 = bool(fuel.get("isAlwaysOpen"))
+        horaires = "" if h24 else "; ".join(f"{k} {fuel[k]}" for k in ("weekdays", "Saturday", "Sunday") if fuel.get(k))
+        horaires = horaires.replace("weekdays", "Lu-Ve").replace("Saturday", "Sa").replace("Sunday", "Di")
+        total = cc in CK_POMPE_TOTAL
+        enseigne_txt = "TotalEnergies (boutique Circle K)" if total else "Circle K (ex-TotalEnergies)"
+        if marque == "CKAUTOMAT":
+            enseigne_txt += " · automate"
+        if marque == "TRUCK":
+            enseigne_txt = "Circle K Truck"
+        out.append({
+            "r": "total" if total and marque != "TRUCK" else "circlek",
+            "e": enseigne_txt,
+            "n": (p.get("name") or "").title(),
+            "a": p.get("add1") or "",
+            "cp": cp, "v": ville.title() if ville.isupper() else ville, "p": cc,
+            "la": round(float(la), 6), "lo": round(float(lo), 6),
+            "pl": 1 if marque == "TRUCK" else None, "ad": None, "lng": None, "cng": None,
+            "h": "24/7" if h24 else horaires,
+            "t": p.get("phone") or "", "w": "",
+            "id": "", "code": str(p.get("code") or ""), "src": "officiel",
+        })
+    return out
+
+
+@st.cache_data(ttl=7 * 86400, show_spinner=False)
+def circlek_lu_services() -> dict:
+    """Services des fiches circlek.lu (Pompe PL, Adblue truck, parking camion), par nom de station normalisé."""
+    page = _get("https://www.circlek.lu/fr/stations", UA).decode("utf-8", "replace")
+    slugs = sorted(set(re.findall(r'href="/fr/station/([a-z0-9\-]+)"', page)))
+    out = {}
+    for slug in slugs:
+        try:
+            html_ = _get(f"https://www.circlek.lu/fr/station/{slug}", UA, timeout=30).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            continue
+        texte = re.sub(r"<[^>]+>", " ", html_)
+        titre = re.search(r"<h1[^>]*>(.*?)</h1>", html_, re.S)
+        nom = norm(re.sub(r"<[^>]+>", " ", titre.group(1))) if titre else norm(slug.replace("-", " "))
+        out[nom] = {
+            "pl": 1 if re.search(r"Pompe PL", texte) else None,
+            "ad": 1 if re.search(r"Adblue truck", texte, re.I) else None,
+            "parking": bool(re.search(r"Parking camion", texte, re.I)),
+            "w": f"https://www.circlek.lu/fr/station/{slug}",
+        }
+    if not out:
+        raise RuntimeError("aucune fiche lue")
+    return out

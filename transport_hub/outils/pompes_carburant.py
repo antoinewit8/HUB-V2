@@ -22,8 +22,9 @@ import streamlit.components.v1 as components
 from core import ui
 from tools.pompes.favorites import (  # noqa: F401  (partagé avec la Carte manuelle)
     PAYS, EUROPE_BBOX, FAV_ASSET, FAV_LOCAL, norm, lire_favorites, fichier_favorites, favorites_depuis,
-    _get, prix_france, lier_prix_france, prix_max_belgique,
+    _get, prix_france, lier_prix_france, prix_max_belgique, circlek_officiel, circlek_lu_services,
 )
+from core import parallele as par
 
 ui.page("pompes", "Mes stations préférées dès l’ouverture, et les autres stations TotalEnergies, AS24 et Circle K "
                   "cherchées à la demande, dans le rayon ou dans tout le pays. La carte s’ouvre en plein écran.")
@@ -36,135 +37,8 @@ OVERPASS_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
-# ─── Liste officielle Circle K (API du localisateur de circlek.lu) ──────────
-# Ancien réseau TotalEnergies racheté par Couche-Tard (Circle K) en 2024 :
-# Allemagne et Pays-Bas vendus entièrement ; Belgique et Luxembourg en coentreprise,
-# boutique Circle K mais pompes sous marque TotalEnergies pendant cinq ans.
-CK_API = "https://api.circlek.com/eu/ngrp-tardmap-store-locator/api/v4/pois"
-CK_PAYS = {"BE", "LU", "NL", "DE"}
-CK_POMPE_TOTAL = {"BE", "LU"}
-CK_HEADERS = {**UA, "Accept": "application/json", "Origin": "https://www.circlek.lu", "Referer": "https://www.circlek.lu/"}
-
-
-def _cp_ville(a, b):
-    """L'API inverse parfois code postal et localité : on remet chaque valeur à sa place."""
-    a, b = (a or "").strip(), (b or "").strip()
-    if re.search(r"\d", a) and not re.search(r"\d", b):
-        return a, b
-    if re.search(r"\d", b) and not re.search(r"\d", a):
-        return b, a
-    return a, b
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def circlek_officiel() -> list:
-    """Toutes les stations du localisateur officiel Circle K (BE, LU, NL, DE). Lève une erreur si l'API ne répond pas."""
-    q = uparse.urlencode({
-        "withDetails": "true", "startLatitude": 50.5, "startLongitude": 6.0, "searchLatitude": 50.5,
-        "searchLongitude": 6.0, "maxDistance": 0, "maxPoints": 10000, "filterMode": "API_ITEMS",
-        "requireAllFilterItems": "true",
-    })
-    data = json.loads(_get(f"{CK_API}?{q}", CK_HEADERS).decode("utf-8"))
-    if not isinstance(data, list) or not data:
-        raise RuntimeError("réponse vide")
-    out = []
-    for p in data:
-        cc = (p.get("country") or "").upper()
-        la, lo = p.get("latitude"), p.get("longitude")
-        if cc not in CK_PAYS or la is None or lo is None:
-            continue
-        cp, ville = _cp_ville(p.get("city"), p.get("zip"))
-        marque = (p.get("brand") or "").upper()
-        fuel = next((h for h in p.get("schedule") or [] if h.get("type") == "openingTimesFuel"), {})
-        h24 = bool(fuel.get("isAlwaysOpen"))
-        horaires = "" if h24 else "; ".join(f"{k} {fuel[k]}" for k in ("weekdays", "Saturday", "Sunday") if fuel.get(k))
-        horaires = horaires.replace("weekdays", "Lu-Ve").replace("Saturday", "Sa").replace("Sunday", "Di")
-        total = cc in CK_POMPE_TOTAL
-        enseigne_txt = "TotalEnergies (boutique Circle K)" if total else "Circle K (ex-TotalEnergies)"
-        if marque == "CKAUTOMAT":
-            enseigne_txt += " · automate"
-        if marque == "TRUCK":
-            enseigne_txt = "Circle K Truck"
-        out.append({
-            "r": "total" if total and marque != "TRUCK" else "circlek",
-            "e": enseigne_txt,
-            "n": (p.get("name") or "").title(),
-            "a": p.get("add1") or "",
-            "cp": cp, "v": ville.title() if ville.isupper() else ville, "p": cc,
-            "la": round(float(la), 6), "lo": round(float(lo), 6),
-            "pl": 1 if marque == "TRUCK" else None, "ad": None, "lng": None, "cng": None,
-            "h": "24/7" if h24 else horaires,
-            "t": p.get("phone") or "", "w": "",
-            "id": "", "code": str(p.get("code") or ""), "src": "officiel",
-        })
-    return out
-
-
-@st.cache_data(ttl=7 * 86400, show_spinner=False)
-def circlek_lu_services() -> dict:
-    """Services des fiches circlek.lu (Pompe PL, Adblue truck, parking camion), par nom de station normalisé."""
-    page = _get("https://www.circlek.lu/fr/stations", UA).decode("utf-8", "replace")
-    slugs = sorted(set(re.findall(r'href="/fr/station/([a-z0-9\-]+)"', page)))
-    out = {}
-    for slug in slugs:
-        try:
-            html_ = _get(f"https://www.circlek.lu/fr/station/{slug}", UA, timeout=30).decode("utf-8", "replace")
-        except Exception:  # noqa: BLE001
-            continue
-        texte = re.sub(r"<[^>]+>", " ", html_)
-        titre = re.search(r"<h1[^>]*>(.*?)</h1>", html_, re.S)
-        nom = norm(re.sub(r"<[^>]+>", " ", titre.group(1))) if titre else norm(slug.replace("-", " "))
-        out[nom] = {
-            "pl": 1 if re.search(r"Pompe PL", texte) else None,
-            "ad": 1 if re.search(r"Adblue truck", texte, re.I) else None,
-            "parking": bool(re.search(r"Parking camion", texte, re.I)),
-            "w": f"https://www.circlek.lu/fr/station/{slug}",
-        }
-    if not out:
-        raise RuntimeError("aucune fiche lue")
-    return out
-
-
-# ─── Frontières (même source que Lavages citernes) ───────────────────────────
-BORDER_URLS = [
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_boundary_lines_land.geojson",
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson",
-]
-
-
-def _decimer(ligne, pas=0.003):
-    if len(ligne) < 3:
-        return [[round(p[0], 4), round(p[1], 4)] for p in ligne]
-    out = [ligne[0]]
-    for p in ligne[1:-1]:
-        if abs(p[0] - out[-1][0]) + abs(p[1] - out[-1][1]) >= pas:
-            out.append(p)
-    out.append(ligne[-1])
-    return [[round(p[0], 4), round(p[1], 4)] for p in out]
-
-
-@st.cache_data(ttl=30 * 86400, show_spinner="Chargement des frontières…")
-def load_borders():
-    w, s, e, n = EUROPE_BBOX
-    for url in BORDER_URLS:
-        try:
-            with ureq.urlopen(ureq.Request(url, headers=UA), timeout=40) as r:
-                data = json.loads(r.read().decode("utf-8"))
-        except Exception:  # noqa: BLE001
-            continue
-        lignes = []
-        for f in data.get("features", []):
-            g = f.get("geometry") or {}
-            parts = [g["coordinates"]] if g.get("type") == "LineString" else (
-                g["coordinates"] if g.get("type") == "MultiLineString" else [])
-            for l in parts:
-                if any(w <= p[0] <= e and s <= p[1] <= n for p in l):
-                    lignes.append(_decimer(l))
-        if lignes:
-            return {"type": "FeatureCollection", "features": [{
-                "type": "Feature", "properties": {},
-                "geometry": {"type": "MultiLineString", "coordinates": lignes}}]}
-    raise RuntimeError("frontières indisponibles")
+# ─── Frontières : core/frontieres.py (fichier local, plus de téléchargement) ──
+from core.frontieres import load_borders  # noqa: E402
 
 
 # ─── Carte plein écran ───────────────────────────────────────────────────────
@@ -1277,24 +1151,31 @@ try:
 except Exception:  # noqa: BLE001
     frontieres = None
 
-extra: dict = {}
+# Prix France, prix max Belgique, liste officielle Circle K et fiches circlek.lu : demandés en même temps.
+# Déjà en cache (cas courant) → une seule carte envoyée, tout de suite. Sinon : carte avec mes stations
+# d'abord, puis la carte complète une fois tout arrivé (deux envois au lieu de trois).
+f_fr, f_be = par.lancer(prix_france), par.lancer(prix_max_belgique)
+f_ck, f_lu = par.lancer(circlek_officiel), par.lancer(circlek_lu_services)
+taches = [f_fr, f_be, f_ck, f_lu]
 zone_bouton, zone_etat = st.empty(), st.empty()
 
 
-def afficher_bouton() -> str:
+def afficher_bouton(extra: dict) -> str:
     html_ = build_app_html(favorites, frontieres, extra, nom_liste)
     with zone_bouton.container():
         bouton_ouvrir(html_)
     return html_
 
 
-app_html = afficher_bouton()          # mes stations tout de suite, le reste arrive ensuite
-notes = []
+if not par.attendre(taches, 1.5):
+    afficher_bouton({})                       # mes stations tout de suite, le reste arrive ensuite
+    zone_etat.caption("Chargement des prix du gazole et de la liste officielle Circle K…")
+    par.attendre(taches)
 
-# Prix : France station par station (flux officiel), Belgique prix maximum officiel
-zone_etat.caption("Chargement des prix du gazole…")
-try:
-    pts = prix_france()
+extra: dict = {}
+notes = []
+pts = par.resultat(f_fr)
+if pts:
     n_px = lier_prix_france(favorites, pts)
     extra["prix_fr"] = [[round(p["la"], 5), round(p["lo"], 5), p["id"], p["px"], p["maj"], 1 if p["pl"] else 0]
                         for p in pts if p["px"] is not None or p["pl"]]
@@ -1302,35 +1183,32 @@ try:
     if any(f["p"] == "FR" for f in favorites):
         notes.append(f"Prix du gazole affiché pour {n_px} de mes stations (flux officiel français, mis à jour toutes "
                      "les 10 min).")
-except Exception as e:  # noqa: BLE001
-    notes.append(f"Prix France indisponibles pour le moment ({str(e)[:120]}).")
-try:
-    extra["prix_be"] = prix_max_belgique()
-except Exception:  # noqa: BLE001
-    pass
-app_html = afficher_bouton()
+else:
+    notes.append(f"Prix France indisponibles pour le moment ({str(f_fr.exception())[:120]}).")
+if par.resultat(f_be):
+    extra["prix_be"] = f_be.result()
 
-# Liste officielle Circle K (BE, LU, NL, DE) : utilisée quand on cherche les autres stations dans ces pays
-zone_etat.caption("Chargement de la liste officielle Circle K…")
-try:
-    officiel = circlek_officiel()
-    try:
-        serv = circlek_lu_services()
+officiel = par.resultat(f_ck)
+if officiel:
+    officiel = [dict(o) for o in officiel]
+    serv = par.resultat(f_lu)
+    if serv:
         for o in officiel:
             sv = serv.get(norm(o["n"]))
             if o["p"] == "LU" and sv:
                 o["pl"] = sv["pl"] if sv["pl"] is not None else o["pl"]
                 o["ad"] = sv["ad"] if sv["ad"] is not None else o["ad"]
                 o["w"] = sv["w"]
-    except Exception:  # noqa: BLE001
+    else:
         notes.append("Fiches circlek.lu indisponibles : pas de détail Pompe PL / AdBlue pour le Luxembourg.")
     for o in officiel:
         o["code"] = o.get("code") or f"{o['la']},{o['lo']}"
     extra["ck"] = officiel
-    app_html = afficher_bouton()
-except Exception:  # noqa: BLE001
+else:
     notes.append("La liste officielle Circle K n’a pas répondu : en Belgique, au Luxembourg, aux Pays-Bas et en "
                  "Allemagne, la recherche utilisera OpenStreetMap seul.")
+
+app_html = afficher_bouton(extra)
 zone_etat.caption(" ".join(notes))
 if frontieres is None:
     st.caption("Tracé des frontières indisponible pour le moment : la carte s’ouvre sans.")
@@ -1351,10 +1229,10 @@ if favorites:
                "Accès PL", "Gazole €/L", "Prix mis à jour"]]
     d1, d2 = st.columns(2)
     with d1:
-        st.download_button("Télécharger la carte (HTML)", app_html.encode("utf-8"),
+        st.download_button("Télécharger la carte (HTML)", lambda: app_html.encode("utf-8"), on_click="ignore",
                            file_name="carte_pompes_carburant.html", mime="text/html", use_container_width=True)
     with d2:
-        st.download_button("Télécharger mes stations avec les prix (Excel)", excel_base(xls),
+        st.download_button("Télécharger mes stations avec les prix (Excel)", lambda: excel_base(xls), on_click="ignore",
                            file_name="mes_stations_carburant.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            use_container_width=True)

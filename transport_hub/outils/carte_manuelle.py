@@ -25,6 +25,7 @@ from jinja2 import Template
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.com").rstrip("/")
 
+from core import parallele as par
 from core import ui
 from tools.pompes.favorites import fichier_favorites, favorites_depuis, prix_france, lier_prix_france
 
@@ -72,6 +73,7 @@ document.getElementById('ouvrir').addEventListener('click', () => {{
 """, height=90)
 
 
+@st.cache_resource(show_spinner=False)
 def _limites_admin() -> str:
     """Limites et numéros des départements français (GeoJSON compact, ~350 Ko).
     Injecté tel quel dans map.html : la carte est ouverte depuis un blob,
@@ -107,9 +109,13 @@ ui.page("carte_manuelle", "Itinéraires poids lourds, péages et kilomètres par
 
 reveiller_serveur(MAP_SERVER_URL)
 
+@st.cache_resource(show_spinner=False)
+def _template(mtime: float) -> Template:
+    return Template((Path(__file__).parent.parent / "map.html").read_text(encoding="utf-8"))
+
+
 try:
-    map_html_path = Path(__file__).parent.parent / "map.html"
-    template = Template(map_html_path.read_text(encoding="utf-8"))
+    template = _template((Path(__file__).parent.parent / "map.html").stat().st_mtime)
 except FileNotFoundError:
     st.error("map.html introuvable à la racine du projet.")
     st.stop()
@@ -131,9 +137,24 @@ def rendre(pompes: list) -> str:
     )
 
 
-# Bouton tout de suite avec ma liste de pompes, puis remplacé quand les prix arrivent
+# Prix du gazole demandés en parallèle : déjà en cache (cas courant) → une seule carte envoyée.
+# Sinon, carte avec mes pompes sans prix tout de suite, remplacée quand les prix arrivent.
 zone_bouton = st.empty()
-pompes, _ = _pompes(avec_prix=False)
+f_prix = par.lancer(_pompes, True)
+if par.attendre([f_prix], 1.5):
+    pompes, note_pompes = par.resultat(f_prix) or _pompes(avec_prix=False)
+else:
+    pompes, _ = _pompes(avec_prix=False)
+    try:
+        with zone_bouton.container():
+            bouton_ouvrir(rendre(pompes))
+    except Exception as e:
+        st.error(f"Erreur chargement map.html : {e}")
+        st.stop()
+    par.attendre([f_prix])
+    pompes_px, note_pompes = par.resultat(f_prix) or ([], "")
+    if any("px" in s for s in pompes_px):
+        pompes = pompes_px
 try:
     html_final = rendre(pompes)
 except Exception as e:
@@ -141,20 +162,15 @@ except Exception as e:
     st.stop()
 with zone_bouton.container():
     bouton_ouvrir(html_final)
-if pompes:
-    pompes_px, note_pompes = _pompes(avec_prix=True)
-    if any("px" in s for s in pompes_px):
-        html_final = rendre(pompes_px)
-        with zone_bouton.container():
-            bouton_ouvrir(html_final)
-    if note_pompes:
-        st.caption(note_pompes)
+if note_pompes:
+    st.caption(note_pompes)
 
 
 st.write("")
 c1, _ = st.columns([1, 2])
 with c1:
-    st.download_button("Télécharger la carte (HTML)", html_final.encode("utf-8"),
+    # fichier préparé seulement au clic (plus de 700 Ko qui ne repartent plus à chaque affichage)
+    st.download_button("Télécharger la carte (HTML)", lambda: html_final.encode("utf-8"), on_click="ignore",
                        file_name="carte_manuelle.html", mime="text/html", use_container_width=True)
 st.caption("Le fichier HTML s’ouvre dans n’importe quel navigateur, sans le HUB. "
            "Il utilise le même serveur carte pour les calculs.")

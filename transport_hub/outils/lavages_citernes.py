@@ -226,54 +226,8 @@ PRECISION_LBL = {
 
 
 
-# ─── Frontières (Natural Earth) ──────────────────────────────────────────────
-BORDER_URLS = [
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_boundary_lines_land.geojson",
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson",
-]
-EUROPE_BBOX = (-11.0, 35.0, 32.0, 62.0)  # ouest, sud, est, nord
-
-
-def _decimer(ligne, pas=0.003):
-    """Allège un tracé (~250 m entre points) pour garder une carte rapide."""
-    if len(ligne) < 3:
-        return [[round(p[0], 4), round(p[1], 4)] for p in ligne]
-    out = [ligne[0]]
-    for p in ligne[1:-1]:
-        if abs(p[0] - out[-1][0]) + abs(p[1] - out[-1][1]) >= pas:
-            out.append(p)
-    out.append(ligne[-1])
-    return [[round(p[0], 4), round(p[1], 4)] for p in out]
-
-
-@st.cache_data(ttl=30 * 86400, show_spinner="Chargement des frontières…")
-def load_borders():
-    """Frontières terrestres Natural Earth, limitées à l'Europe. Lève une erreur si indisponible
-    (pour ne pas mettre un échec en cache)."""
-    w, s, e, n = EUROPE_BBOX
-    for url in BORDER_URLS:
-        try:
-            data = _get_json(url, timeout=40)
-        except Exception:
-            continue
-        lignes = []
-        for f in data.get("features", []):
-            g = f.get("geometry") or {}
-            if g.get("type") == "LineString":
-                parts = [g["coordinates"]]
-            elif g.get("type") == "MultiLineString":
-                parts = g["coordinates"]
-            else:
-                continue
-            for l in parts:
-                if any(w <= p[0] <= e and s <= p[1] <= n for p in l):
-                    lignes.append(_decimer(l))
-        if lignes:
-            return {"type": "FeatureCollection", "features": [{
-                "type": "Feature", "properties": {},
-                "geometry": {"type": "MultiLineString", "coordinates": lignes},
-            }]}
-    raise RuntimeError("frontières indisponibles")
+# ─── Frontières : core/frontieres.py (fichier local, plus de téléchargement) ──
+from core.frontieres import load_borders  # noqa: E402
 
 
 # ─── Chargement ──────────────────────────────────────────────────────────────

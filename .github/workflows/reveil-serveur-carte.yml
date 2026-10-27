@@ -1,0 +1,22 @@
+# Garde le serveur carte (Render, plan gratuit) éveillé pendant les heures de bureau.
+# Render l'endort après 15 min sans requête ; le réveil coûte 30 à 60 s au premier calcul
+# de la Carte manuelle ou de Calcul KM. Un appel à /health toutes les 10 min l'en empêche.
+# Lun–ven, ~6 h–20 h à Bruxelles (UTC+1 l'hiver ; décalé d'une heure l'été), soit
+# ~300 h par mois sur les 750 h gratuites de Render.
+name: Réveil serveur carte
+
+on:
+  schedule:
+    - cron: "*/10 5-18 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Appel /health
+        env:
+          URL: ${{ vars.MAP_SERVER_URL || 'https://cartes-bot.onrender.com' }}
+        run: |
+          curl -fsS --max-time 90 --retry 2 --retry-delay 5 "$URL/health" -o /dev/null -w "HTTP %{http_code} en %{time_total}s\n" || echo "Serveur injoignable"

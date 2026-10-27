@@ -23,4 +23,9 @@ pages += [st.Page(t["file"], title=t["title"], url_path=t["key"]) for t in ui.TO
 # Les liens (accueil ↔ outils) pointent vers ces objets plutôt que vers des chemins de fichier.
 st.session_state["_hub_pages"] = {ui.HOME_FILE: pages[0], **{t["file"]: p for t, p in zip(ui.TOOLS, pages[1:])}}
 
+# Données des cartes chargées en tâche de fond dès la première visite (voir core/prechauffage.py)
+from core import prechauffage  # noqa: E402
+
+prechauffage.lancer()
+
 st.navigation(pages, position="hidden").run()
