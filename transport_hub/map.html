@@ -795,7 +795,40 @@
         // Tracés déjà calculés (mêmes points, mêmes options) : réaffichés sans
         // appel au serveur (annuler un déplacement, décocher puis recocher…).
         const ROUTE_CACHE = new Map();
-        const ROUTE_CACHE_MAX = 40;
+        const ROUTE_CACHE_MAX = 80;
+
+        // Ce cache est aussi gardé dans le navigateur (3 jours, 40 tracés, hors trafic réel) :
+        // un trajet déjà fait s'affiche tout de suite, même après avoir fermé la carte.
+        const LS_ROUTES = 'cm_routes_v1', LS_TTL_MS = 3 * 24 * 3600e3, LS_MAX = 40;
+        try {
+            const now = Date.now();
+            for (const [k, t, d] of JSON.parse(localStorage.getItem(LS_ROUTES) || '[]')) {
+                if (now - t < LS_TTL_MS && d && d.polyline) { d._t = t; ROUTE_CACHE.set(k, d); }
+            }
+        } catch (e) { }
+        let _lsTimer = null;
+        function _lsSauver() {
+            clearTimeout(_lsTimer);
+            _lsTimer = setTimeout(() => {
+                let a;
+                try { a = [...ROUTE_CACHE.entries()].slice(-LS_MAX).map(([k, d]) => [k, d._t || Date.now(), d]); }
+                catch (e) { return; }
+                // Mémoire du navigateur pleine : on retire les plus anciens jusqu'à ce que ça tienne.
+                while (a.length) {
+                    try { localStorage.setItem(LS_ROUTES, JSON.stringify(a)); return; }
+                    catch (e) { a = a.slice(Math.ceil(a.length / 4)); }
+                }
+                try { localStorage.removeItem(LS_ROUTES); } catch (e) { }
+            }, 1500);
+        }
+
+        // Pré-calcul : dès qu'une suggestion de départ ou d'arrivée a des chances d'être choisie
+        // (première de la liste après une pause de frappe, ligne survolée ou choisie au clavier),
+        // l'itinéraire part en tâche de fond. Au clic, il est déjà là ou presque.
+        const PREFETCH = new Map();          // clé → Promise en cours
+        const PREFETCH_OK = new Map();       // clé → { d, t } arrivé
+        const PREFETCH_MAX = 12, PREFETCH_TTL_MS = 120e3;
+        let prefetchTimer = null;
 
         // Recalcul en direct pendant qu'on glisse un repère, comme Google Maps.
         // Un seul appel à la fois, au plus un toutes les LIVE_DRAG_MIN_MS.
@@ -1338,6 +1371,12 @@
             }
         });
 
+        // Survol d'une suggestion : son itinéraire part tout de suite.
+        document.getElementById('ep-suggest').addEventListener('mouseover', e => {
+            const item = e.target.closest('.sg-item');
+            if (item && sg.role) prefetchHit(sg.role, sg.hits[+item.dataset.i]);
+        });
+
         function _onEpKey(e, role) {
             const box = document.getElementById('ep-suggest');
             const q = e.target.value.trim();
@@ -1443,12 +1482,14 @@
                 ? 'Powered by Geoapify · © OpenStreetMap · <span class="sg-more">Recherche OSM</span>'
                 : '© OpenStreetMap'}</div>`;
             box.classList.add('show');
+            prefetchActif(450);          // première suggestion, si la frappe s'arrête là
         }
 
         function _highlightSuggest() {
             const items = document.querySelectorAll('#ep-suggest .sg-item');
             items.forEach((el, i) => el.classList.toggle('active', i === sg.active));
             if (items[sg.active]) items[sg.active].scrollIntoView({ block: 'nearest' });
+            prefetchActif(200);
         }
 
         function _suggestStatus(html, isError) {
@@ -1459,6 +1500,7 @@
 
         function closeSuggest() {
             clearTimeout(sg.timer);
+            clearTimeout(prefetchTimer);
             if (sg.ctrl) { sg.ctrl.abort(); sg.ctrl = null; }
             sg.seq++;
             sg.hits = []; sg.active = -1; sg.query = '';
@@ -1637,9 +1679,53 @@
                 o.avoid_tolls, o.avoid_highways, o.traffic, o.alternatives, o.co2, o.ferries]);
         }
         function _cacheRoute(key, data) {
+            if (!data._t) data._t = Date.now();
             ROUTE_CACHE.delete(key);
             ROUTE_CACHE.set(key, data);
             while (ROUTE_CACHE.size > ROUTE_CACHE_MAX) ROUTE_CACHE.delete(ROUTE_CACHE.keys().next().value);
+            _lsSauver();
+        }
+
+        // Points du trajet si l'on choisissait cette suggestion pour le départ ou l'arrivée.
+        function _ptsAvec(role, hit) {
+            if ((role !== 'origin' && role !== 'dest') || !hit) return null;
+            const autre = role === 'origin' ? dest : origin;
+            if (!autre) return null;
+            const p = { lat: hit.lat, lng: hit.lng };
+            const mid = waypoints.map(wp => { const ll = wp.marker.getLngLat(); return { lat: ll.lat, lng: ll.lng }; });
+            return role === 'origin' ? [p, ...mid, { lat: dest.lat, lng: dest.lng }]
+                                     : [{ lat: origin.lat, lng: origin.lng }, ...mid, p];
+        }
+
+        function _prefetchPret(key) {
+            const ok = PREFETCH_OK.get(key);
+            if (ok && performance.now() - ok.t < PREFETCH_TTL_MS) return ok.d;
+            PREFETCH_OK.delete(key);
+            return null;
+        }
+
+        function prefetchHit(role, hit) {
+            // Nouveau départ / arrivée = traversées imposées remises à zéro : pré-calcul seulement sans traversée.
+            if (forcedFerries.length) return;
+            const pts = _ptsAvec(role, hit);
+            if (!pts || _distKm(pts[0], pts[pts.length - 1]) < 0.05) return;
+            const key = _routeKey(pts);
+            if (PREFETCH.has(key) || _prefetchPret(key) || (!options().traffic && ROUTE_CACHE.has(key))) return;
+            const pr = _viaDrag(pts).then(d => {
+                PREFETCH_OK.set(key, { d, t: performance.now() });
+                if (!options().traffic) _cacheRoute(key, d);
+                return d;
+            }).finally(() => PREFETCH.delete(key));
+            pr.catch(() => { });
+            PREFETCH.set(key, pr);
+            while (PREFETCH_OK.size > PREFETCH_MAX) PREFETCH_OK.delete(PREFETCH_OK.keys().next().value);
+        }
+
+        function prefetchActif(delai) {
+            clearTimeout(prefetchTimer);
+            const role = sg.role, hit = sg.hits[sg.active];
+            if (!hit) return;
+            prefetchTimer = setTimeout(() => prefetchHit(role, hit), delai);
         }
 
         // fast = pendant un glisser : coordonnées uniquement, pas de replis.
@@ -1652,6 +1738,13 @@
                 const hit = ROUTE_CACHE.get(key);
                 _cacheRoute(key, hit);
                 return hit;
+            }
+            // Pré-calcul lancé pendant le choix de la suggestion : arrivé, ou on attend la fin.
+            const pret = _prefetchPret(key);
+            if (pret) return pret;
+            if (PREFETCH.has(key)) {
+                try { return _checkRoute(await PREFETCH.get(key), pts); }
+                catch (e) { if (e.name === 'AbortError') throw e; }
             }
             const attempts = fast
                 ? [['recalculate_drag', _viaDrag]]
@@ -1695,11 +1788,15 @@
             if (forceReference) forcedFerries = [];
             const pts = allPoints();
             // Réponse déjà en cache : pas d'état « chargement », affichage direct.
-            const instant = !options().traffic && ROUTE_CACHE.has(_routeKey(pts));
+            const instant = (!options().traffic && ROUTE_CACHE.has(_routeKey(pts))) || !!_prefetchPret(_routeKey(pts));
             if (!instant) { setLoading(true); refreshPanel(); }
+            const t0 = performance.now();
             try {
                 const data = await requestRoute(pts, ctrl.signal);
                 if (seq !== calcSeq) return;
+                console.info(`Itinéraire affiché en ${Math.round(performance.now() - t0)} ms`
+                    + (data.ptv_ms != null ? ` (dont PTV ${data.ptv_ms} ms côté serveur)` : '')
+                    + (data.cached ? ' — cache serveur' : ''));
                 applyRoute(data, asReference);
                 if (asReference) forceReference = false;
             } catch (err) {
