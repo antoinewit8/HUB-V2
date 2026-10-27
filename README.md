@@ -9,7 +9,7 @@ pip install -r transport_hub/requirements.txt
 streamlit run transport_hub/app.py
 ```
 
-Paquets système (OCR) : `transport_hub/packages.txt`. Thème : `.streamlit/config.toml`.
+Thème : `.streamlit/config.toml`.
 
 ## Structure
 
@@ -19,7 +19,7 @@ Paquets système (OCR) : `transport_hub/packages.txt`. Thème : `.streamlit/conf
 | `transport_hub/accueil.py` | Page d'accueil : tous les outils regroupés par catégorie |
 | `transport_hub/core/ui.py` | Registre des outils + habillage commun (typo Apple, cartes, boutons, en-têtes) |
 | `transport_hub/outils/` | Un fichier par outil |
-| `transport_hub/tools/` | Moteurs de calcul (PTV / KM, TX-FLEX, scrapers gasoil) |
+| `transport_hub/tools/` | Moteurs de calcul (PTV / KM, renta, planning, pompes, prix gasoil BE) |
 | `transport_hub/map.html` | Carte manuelle (ouverte en plein écran) |
 | `transport_hub/assets/` | Logo CB Groupe et photo d'accueil |
 

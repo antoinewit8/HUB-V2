@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -16,7 +17,7 @@ ui.page("calcul_km", "Déposez un fichier Excel : les distances poids lourds son
 
 # Après une mise à jour du dépôt, Streamlit relit la page mais garde en mémoire les
 # modules déjà importés (run_km, modules.*) : on les recharge si la version ne suit pas.
-VERSION_MOTEUR = 4
+VERSION_MOTEUR = 5
 
 
 def _moteur():
@@ -140,6 +141,94 @@ elif job and not job["en_cours"]:
     _nettoyer(job)
 
 
+def _tableau(resultats):
+    if not resultats:
+        st.info("Aucune ligne dans le résultat.")
+        return
+    df = pd.DataFrame(resultats)
+    choix = st.radio("Afficher", ["Tout", "À vérifier", "Erreurs"], horizontal=True, key="km_filtre",
+                     label_visibility="collapsed")
+    if choix == "À vérifier":
+        df = df[df["Statut"] == "À vérifier"]
+    elif choix == "Erreurs":
+        df = df[df["Statut"] == "Erreur"]
+    if df["Péage (€)"].isna().all():
+        df = df.drop(columns=["Péage (€)"])
+    if len(df["Feuille"].unique()) == 1:
+        df = df.drop(columns=["Feuille"])
+    st.dataframe(
+        df, width="stretch", hide_index=True,
+        column_config={
+            "Carte": st.column_config.LinkColumn("Carte", display_text="Voir"),
+            "KM": st.column_config.NumberColumn("KM", format="%.1f"),
+            "Contrôle": st.column_config.TextColumn("Contrôle", width="large"),
+        },
+    )
+
+
+# Carte d'un trajet (ancien outil « Cartes itinéraires », sans second calcul PTV : le tracé vient du
+# calcul ci-dessus ; un trajet sorti du cache n'a pas de tracé en mémoire → un appel PTV à la demande)
+_CARTE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','Helvetica Neue',Arial,sans-serif}
+#map{height:620px;width:100%;border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 0 0 .5px rgba(0,0,0,.08)}
+.panel{position:absolute;bottom:20px;left:12px;z-index:10;background:rgba(255,255,255,.9);
+  backdrop-filter:saturate(180%) blur(20px);padding:12px 16px;border-radius:14px;font-size:13px;line-height:1.6;
+  color:#1d1d1f;box-shadow:0 4px 24px rgba(0,0,0,.12);max-width:320px}
+.panel b{font-weight:600}.panel .km{color:#0071e3;font-weight:600}.panel .warn{color:#b25000}
+.mk{width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:flex;align-items:center;
+  justify-content:center;font-weight:800;font-size:11px;color:#fff;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.mk span{transform:rotate(45deg)}.A{background:#34c759}.B{background:#ff3b30}
+</style></head><body>
+<div id="map"></div><div class="panel" id="panel"></div>
+<script>
+const R = __DATA__;
+const map = new maplibregl.Map({container:'map', style:'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+  center:[R.o[1], R.o[0]], zoom:5});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+function mk(c){const e=document.createElement('div');e.className='mk '+c;const s=document.createElement('span');
+  s.textContent=c;e.appendChild(s);return e;}
+const esc = t => String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+map.on('load', () => {
+  const ligne = R.coords && R.coords.length ? R.coords.map(c => [c[1], c[0]]) : [[R.o[1], R.o[0]], [R.d[1], R.d[0]]];
+  map.addSource('r', {type:'geojson', data:{type:'Feature', geometry:{type:'LineString', coordinates:ligne}}});
+  map.addLayer({id:'r', type:'line', source:'r', layout:{'line-join':'round','line-cap':'round'},
+    paint: R.coords && R.coords.length ? {'line-color':'#0071e3','line-width':5,'line-opacity':.9}
+                                       : {'line-color':'#8e8e93','line-width':3,'line-dasharray':[2,2]}});
+  const b = ligne.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(ligne[0], ligne[0]));
+  map.fitBounds(b, {padding:60, duration:0});
+  new maplibregl.Marker({element:mk('A'), anchor:'bottom'}).setLngLat([R.o[1], R.o[0]]).addTo(map);
+  new maplibregl.Marker({element:mk('B'), anchor:'bottom'}).setLngLat([R.d[1], R.d[0]]).addTo(map);
+});
+document.getElementById('panel').innerHTML = '<b>' + esc(R.origin) + '</b><br>→ <b>' + esc(R.dest) + '</b><br>'
+  + '<span class="km">' + R.km.toFixed(1) + ' km</span>' + (R.peage ? ' · péage ' + R.peage.toFixed(2) + ' €' : '')
+  + (R.coords && R.coords.length ? '' : '<br><span class="warn">Tracé indisponible : ligne droite affichée</span>');
+</script></body></html>"""
+
+
+def _carte(trajets):
+    if not trajets:
+        st.info("Aucun trajet calculé à afficher.")
+        return
+    trajets = sorted(trajets, key=lambda t: (t["statut"] == "OK", t["origin"], t["dest"]))
+    libelles = [f"{t['origin']} → {t['dest']}  ·  {t['km']:.0f} km" + ("  ·  à vérifier" if t["statut"] != "OK" else "")
+                for t in trajets]
+    i = st.selectbox(f"{len(trajets)} trajet{'s' if len(trajets) > 1 else ''} distinct{'s' if len(trajets) > 1 else ''}",
+                     range(len(trajets)), format_func=lambda k: libelles[k], key="km_carte_sel")
+    t = trajets[i]
+    coords = None
+    try:
+        with st.spinner("Tracé PTV…"):
+            coords = _moteur().trace(t["cle"])
+    except Exception as e:
+        st.caption(f"Tracé non récupéré : {e}")
+    data = dict(t, coords=coords or [])
+    st.components.v1.html(_CARTE_HTML.replace("__DATA__", json.dumps(data)), height=630, scrolling=False)
+
+
 # === Résultats ===
 stats = st.session_state.get(K_STATS) or {}
 
@@ -182,29 +271,14 @@ if st.session_state.get(K_RES):
     )
 
     resultats = stats.get("resultats", [])
-    if resultats:
-        ui.section("Résultats")
-        df = pd.DataFrame(resultats)
-        choix = st.radio("Afficher", ["Tout", "À vérifier", "Erreurs"], horizontal=True, key="km_filtre",
-                         label_visibility="collapsed")
-        if choix == "À vérifier":
-            df = df[df["Statut"] == "À vérifier"]
-        elif choix == "Erreurs":
-            df = df[df["Statut"] == "Erreur"]
-        if df["Péage (€)"].isna().all():
-            df = df.drop(columns=["Péage (€)"])
-        if len(df["Feuille"].unique()) == 1:
-            df = df.drop(columns=["Feuille"])
-        st.dataframe(
-            df, width="stretch", hide_index=True,
-            column_config={
-                "Carte": st.column_config.LinkColumn("Carte", display_text="Voir"),
-                "KM": st.column_config.NumberColumn("KM", format="%.1f"),
-                "Contrôle": st.column_config.TextColumn("Contrôle", width="large"),
-            },
-        )
+    trajets_carte = stats.get("carte", [])
+    tab_res, tab_carte = st.tabs(["Résultats", f"Carte des trajets ({len(trajets_carte)})"])
+    with tab_res:
+        _tableau(resultats)
+    with tab_carte:
+        _carte(trajets_carte)
 
     if st.button("Nouveau calcul"):
-        for key in (K_RES, K_RES_NOM, K_STATS):
+        for key in (K_RES, K_RES_NOM, K_STATS, "km_carte_sel"):
             st.session_state.pop(key, None)
         st.rerun()

@@ -15,6 +15,8 @@ Déroulé
 
 Cache des trajets (cache_trajets.json, format v2) : clé = points + étapes + options,
 sans le tracé ; entrées datées (péages revus après 180 jours, km après 365 jours).
+Tracés : gardés en mémoire (onglet « Carte » de la page), recalculés à la demande
+pour un trajet venu du cache — voir trace().
 """
 
 import datetime as _dt
@@ -29,7 +31,7 @@ KM_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(KM_DIR, "cache_trajets.json")
 GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
 
-VERSION = 4                     # lu par la page : version en mémoire périmée → rechargement
+VERSION = 5                     # lu par la page : version en mémoire périmée → rechargement
 MAX_WORKERS = 6
 CACHE_VERSION = 2
 DUREE_CACHE_JOURS = {"peage": 180, "km": 365}
@@ -37,6 +39,48 @@ ECART_REFERENCE = 0.05          # écart toléré avec le km de référence d'un
 RATIO_VOL_OISEAU = 2.2          # au-delà : tracé suspect (détour, mauvais point)
 
 _lock = threading.Lock()
+
+# ─── Tracés pour l'onglet Carte (mémoire du processus, pas sur disque) ──────
+_TRACES: dict = {}               # clé trajet → [[lat, lon], ...] simplifié
+_PARAMS: dict = {}               # clé trajet → paramètres PTV, pour recalculer un tracé absent
+MAX_TRACES = 3000
+MAX_POINTS = 600
+
+
+def _decimer(coords, n=MAX_POINTS):
+    if not coords:
+        return []
+    pas = max(1, -(-len(coords) // n))
+    pts = coords[::pas]
+    if pts[-1] != coords[-1]:
+        pts.append(coords[-1])
+    return [[round(float(a), 5), round(float(b), 5)] for a, b in pts]
+
+
+def _garder_trace(cle, coords):
+    with _lock:
+        if len(_TRACES) >= MAX_TRACES:
+            _TRACES.pop(next(iter(_TRACES)))
+        _TRACES[cle] = _decimer(coords)
+
+
+def trace(cle: str):
+    """Tracé d'un trajet du dernier calcul : en mémoire, sinon un appel PTV (trajet venu du cache)."""
+    with _lock:
+        if cle in _TRACES:
+            return _TRACES[cle]
+        p = _PARAMS.get(cle)
+    if not p:
+        return None
+    _inject_path()
+    from modules.ptv_router_km import calculate_km_route
+    route = calculate_km_route(p["o"][0], p["o"][1], p["d"][0], p["d"][1], waypoints=p["waypoints"],
+                               calculer_peage=False, super_pref=p["super_pref"],
+                               prohibited_countries=p["prohibited"], erreurs=[])
+    if not route or not route.get("polyline_coords"):
+        return None
+    _garder_trace(cle, route["polyline_coords"])
+    return _TRACES.get(cle)
 
 
 def _inject_path():
@@ -200,6 +244,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         def _calculer_cle(cle, origin, dest, po, pd_, waypoints, prohibited, wp, notes):
             with _lock:
                 en_cache = cache.get(cle)
+                _PARAMS[cle] = {"o": po, "d": pd_, "waypoints": waypoints, "prohibited": prohibited,
+                                "super_pref": super_pref}
             # entrée sans lien carte (serveur absent la fois précédente) : recalculée si on veut la carte
             if en_cache and _valide(en_cache, calculer_peage) and (en_cache.get("map_url") or not avec_cartes):
                 data, depuis_cache = dict(en_cache), True
@@ -212,6 +258,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                                            prohibited_countries=prohibited, erreurs=errs)
                 if not route:
                     return {"erreur": errs[0] if errs else "PTV n'a pas renvoyé d'itinéraire"}
+                if route.get("polyline_coords"):
+                    _garder_trace(cle, route["polyline_coords"])
                 url = ""
                 if avec_cartes:
                     try:
@@ -234,7 +282,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             vol = _vol(po, pd_)
             if vol > 20 and data["km"] > RATIO_VOL_OISEAU * vol:
                 notes.append(f"tracé {data['km'] / vol:.1f} × le vol d'oiseau ({vol:.0f} km) : détour suspect")
-            return {"data": data, "cache": depuis_cache, "notes": notes}
+            return {"data": data, "cache": depuis_cache, "notes": notes, "cle": cle}
 
         resultats_trajets = {}
         progress(0, total, f"{total} trajets distincts à calculer ({len(lignes)} lignes)")
@@ -254,6 +302,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         # 4. Lignes, contrôles, écriture ────────────────────────────────────
         progress(total, total, "Écriture du fichier...")
         par_feuille = {}
+        vus_carte = set()
+        stats["carte"] = []                                # trajets distincts pour l'onglet Carte
         for nom, r in lignes:
             res = resultats_trajets.get((r["origin"], r["dest"]), {"erreur": "non calculé"})
             o, d = geo.get(r["origin"]), geo.get(r["dest"])
@@ -287,6 +337,11 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 stats["from_cache"] += int(bool(res.get("cache")))
 
             controle = " | ".join(notes)
+            if data and res.get("cle") and (data.get("km") or 0) > 0 and (r["origin"], r["dest"]) not in vus_carte:
+                vus_carte.add((r["origin"], r["dest"]))
+                stats["carte"].append({"origin": r["origin"], "dest": r["dest"], "km": data["km"],
+                                       "peage": data.get("prix_peage", 0) or 0, "statut": statut,
+                                       "cle": res["cle"], "o": [o["lat"], o["lon"]], "d": [d["lat"], d["lon"]]})
             par_feuille.setdefault(nom, []).append(
                 {"row": r["row"], "data": data, "statut": statut, "controle": controle})
             stats["resultats"].append({

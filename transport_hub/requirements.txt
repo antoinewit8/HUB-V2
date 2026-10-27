@@ -10,7 +10,3 @@ httpx
 jinja2
 pdfplumber
 beautifulsoup4
-pdf2image
-img2pdf
-Pillow
-ocrmypdf

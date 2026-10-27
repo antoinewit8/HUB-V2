@@ -1,5 +1,0 @@
-tesseract-ocr
-tesseract-ocr-fra
-tesseract-ocr-eng
-ghostscript
-poppler-utils
