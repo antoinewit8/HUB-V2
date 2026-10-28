@@ -114,6 +114,16 @@
         #ep-suggest.show { display: block; }
         .sg-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 9px; cursor: pointer; }
         .sg-item.active, .sg-item:hover { background: var(--bg); }
+        /* Aperçu sur la carte de la suggestion survolée */
+        .hv-pin { position: relative; width: 18px; height: 18px; pointer-events: none; }
+        .hv-pin::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--blue);
+            border: 3px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.35); box-sizing: border-box; }
+        .hv-pin::after { content: ""; position: absolute; inset: -9px; border-radius: 50%; background: rgba(0,113,227,.22);
+            animation: hvPulse 1.4s ease-out infinite; }
+        @keyframes hvPulse { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+        .hv-lbl { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); white-space: nowrap; max-width: 260px;
+            overflow: hidden; text-overflow: ellipsis; padding: 3px 8px; border-radius: 980px; background: rgba(255,255,255,.96);
+            color: var(--text); font: 600 12px/1.3 var(--font); box-shadow: 0 1px 5px rgba(0,0,0,.25); }
         .sg-status { padding: 10px; font-size: 13px; color: var(--sub); line-height: 1.45; }
         .sg-status.err { color: var(--red); }
         .sg-detail { display: block; margin-top: 3px; font-size: 11.5px; color: var(--sub); }
@@ -1424,11 +1434,48 @@
             }
         });
 
-        // Survol d'une suggestion : son itinéraire part tout de suite.
+        // Survol d'une suggestion : point affiché sur la carte, et son itinéraire part tout de suite.
         document.getElementById('ep-suggest').addEventListener('mouseover', e => {
             const item = e.target.closest('.sg-item');
-            if (item && sg.role) prefetchHit(sg.role, sg.hits[+item.dataset.i]);
+            if (!item) return;
+            const hit = sg.hits[+item.dataset.i];
+            showHoverPin(hit);
+            if (sg.role) prefetchHit(sg.role, hit);
         });
+        // Souris sortie de la liste : on revient à la suggestion active au clavier (ou rien)
+        document.getElementById('ep-suggest').addEventListener('mouseleave', () => {
+            showHoverPin(_hoverKbd ? sg.hits[sg.active] : null);
+        });
+
+        // ── Aperçu d'un lieu sur la carte (survol d'une suggestion ou d'un résultat de recherche) ──
+        let hoverPin = null, hoverPinKey = '', _hoverKbd = false;
+        function showHoverPin(hit) {
+            if (!hit || !isFinite(hit.lat) || !isFinite(hit.lng)) {
+                if (hoverPin) { hoverPin.remove(); hoverPin = null; }
+                hoverPinKey = '';
+                return;
+            }
+            const key = hit.lat.toFixed(6) + ',' + hit.lng.toFixed(6);
+            if (key === hoverPinKey && hoverPin) return;
+            hoverPinKey = key;
+            if (!hoverPin) {
+                const el = document.createElement('div');
+                el.className = 'hv-pin';
+                el.innerHTML = '<span class="hv-lbl"></span>';
+                hoverPin = new maplibregl.Marker({ element: el, anchor: 'center' });
+            }
+            hoverPin.getElement().querySelector('.hv-lbl').textContent = hitLabel(hit).short || hitLabel(hit).full;
+            hoverPin.setLngLat([hit.lng, hit.lat]).addTo(map);
+            // Hors de la partie visible (le volet couvre la gauche) : la carte se déplace, sans changer le zoom
+            const pt = map.project([hit.lng, hit.lat]);
+            const c = map.getContainer();
+            const side = document.getElementById('info-box');
+            const gauche = side && !side.classList.contains('collapsed') ? side.getBoundingClientRect().right + 20 : 40;
+            if (pt.x < gauche || pt.x > c.clientWidth - 40 || pt.y < 40 || pt.y > c.clientHeight - 40) {
+                const dx = gauche > 40 ? (gauche - 40) / 2 : 0;
+                map.easeTo({ center: [hit.lng, hit.lat], offset: [dx, 0], duration: 350 });
+            }
+        }
 
         function _onEpKey(e, role) {
             const box = document.getElementById('ep-suggest');
@@ -1542,6 +1589,8 @@
             const items = document.querySelectorAll('#ep-suggest .sg-item');
             items.forEach((el, i) => el.classList.toggle('active', i === sg.active));
             if (items[sg.active]) items[sg.active].scrollIntoView({ block: 'nearest' });
+            _hoverKbd = true;
+            showHoverPin(sg.hits[sg.active]);
             prefetchActif(200);
         }
 
@@ -1557,6 +1606,8 @@
             if (sg.ctrl) { sg.ctrl.abort(); sg.ctrl = null; }
             sg.seq++;
             sg.hits = []; sg.active = -1; sg.query = '';
+            _hoverKbd = false;
+            showHoverPin(null);
             const box = document.getElementById('ep-suggest');
             box.classList.remove('show');
             box.innerHTML = '';
@@ -3625,9 +3676,10 @@
         function _renderSearchList() {
             const listEl = document.getElementById('search-results');
             listEl.innerHTML = searchHits.map((h, i) =>
-                `<div class="sr-item" onclick="_placeSearchPin(${i})"
+                `<div class="sr-item" onclick="_placeSearchPin(${i})" onmouseenter="showHoverPin(searchHits[${i}])"
                       title="${esc(hitLabel(h).full)}">${hitHTML(h)}</div>`
             ).join('');
+            listEl.onmouseleave = () => showHoverPin(null);
             listEl.classList.add('show');
         }
 
@@ -3681,6 +3733,7 @@
             const hit = searchHits[index];
             if (!hit) return;
             document.getElementById('search-results').classList.remove('show');
+            showHoverPin(null);
             _cancelSearchPin();
 
             const el = document.createElement('div');
