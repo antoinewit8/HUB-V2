@@ -286,8 +286,8 @@
         #lavages-box { display: none; margin-top: 10px; padding: 13px 14px 10px; background: #fff; border-radius: 14px; box-shadow: var(--tile); }
         #lavages-box.show { display: block; }
         #lavages-box .al-row { max-width: none; }
-        .al-ico.lavage { background: #0b8a8f; font-variant-numeric: tabular-nums; }
-        .lavage-pin { width: 22px; height: 22px; border-radius: 6px; background: #0b8a8f; color: #fff; border: 2px solid #fff;
+        .al-ico.lavage { background: #d1007a; font-variant-numeric: tabular-nums; }
+        .lavage-pin { width: 22px; height: 22px; border-radius: 6px; background: #d1007a; color: #fff; border: 2px solid #fff;
             font: 700 11px/18px var(--font); text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.4); cursor: pointer;
             font-variant-numeric: tabular-nums; }
         .lavage-pin:hover { transform: scale(1.12); }
@@ -1434,12 +1434,15 @@
                 layout: { visibility: lavages.on ? 'visible' : 'none' },
                 paint: {
                     // plus gros pour les stations souvent utilisées
+                    // Magenta vif + contour blanc épais : ressort sur Plan, Satellite et Toner
+                    // (le bleu est pris par le tracé et les pompes, le rouge par les restrictions)
                     'circle-radius': ['interpolate', ['linear'], ['zoom'],
-                        5, ['case', ['>=', ['get', 'nb'], 5], 4.5, 3.2],
-                        9, ['case', ['>=', ['get', 'nb'], 5], 7, 5.5],
-                        13, ['case', ['>=', ['get', 'nb'], 5], 9, 7.5]],
-                    'circle-color': ['case', ['>', ['get', 'nb'], 0], '#0b8a8f', '#8fc9cb'],
-                    'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.6,
+                        5, ['case', ['>=', ['get', 'nb'], 5], 5.5, 4.5],
+                        9, ['case', ['>=', ['get', 'nb'], 5], 8.5, 7],
+                        13, ['case', ['>=', ['get', 'nb'], 5], 11, 9]],
+                    'circle-color': ['case', ['>', ['get', 'nb'], 0], '#d1007a', '#f08cc4'],
+                    'circle-stroke-color': ['case', ['>', ['get', 'nb'], 0], '#ffffff', '#d1007a'],
+                    'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 10, 2.5],
                     'circle-opacity': ['case', ['all', ['==', ['get', 'route'], 1], ['==', ['get', 'on'], 0]], 0.35, 0.95],
                     'circle-stroke-opacity': ['case', ['all', ['==', ['get', 'route'], 1], ['==', ['get', 'on'], 0]], 0.35, 1]
                 }
@@ -1469,7 +1472,7 @@
             lignes.push(`<div>${esc([s.cp, s.v].filter(Boolean).join(' '))}${s.p ? ' · ' + esc(s.p) : ''}</div>`);
             if (s.tel) lignes.push(`<div><a href="tel:${esc(s.tel.replace(/\s+/g, ''))}">${esc(s.tel)}</a></div>`);
             if (s.nb) {
-                lignes.push(`<div style="margin-top:4px;color:#0b8a8f;font-weight:600">${s.nb} lavage${s.nb > 1 ? 's' : ''} dans l'historique</div>`);
+                lignes.push(`<div style="margin-top:4px;color:#d1007a;font-weight:600">${s.nb} lavage${s.nb > 1 ? 's' : ''} dans l'historique</div>`);
                 const px = [s.pm != null ? `prix médian <b>${_prix2(s.pm)}</b>` : '', s.pd != null ? `dernier ${_prix2(s.pd)}` : ''].filter(Boolean);
                 if (px.length) lignes.push(`<div>${px.join(' · ')}</div>`);
                 if (s.dl) lignes.push(`<div style="color:var(--sub);font-size:12px">Dernier lavage le ${_dateFr(s.dl)}</div>`);
