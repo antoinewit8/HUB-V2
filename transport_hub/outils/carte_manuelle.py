@@ -6,6 +6,9 @@ seul dans un nouvel onglet, sans rien de Streamlit autour (même système que
 l'Optimisateur Lavages CIT). Le départ, l'arrivée, les étapes et les options
 se définissent toujours directement dans map.html.
 
+Option « Stations de lavage » : la base géocodée de la page Optimisateur Lavages
+(tools/lavages/stations.py) ; même affichage le long du trajet.
+
 Option « Pompes Total (ma liste) » : la liste de la page Pompes carburant
 (tools/pompes/favorites.py) est injectée dans la carte, avec le prix du gazole
 officiel en France quand il répond ; la carte affiche celles le long du trajet.
@@ -28,6 +31,7 @@ MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.c
 from core import parallele as par
 from core import ui
 from tools.pompes.favorites import fichier_favorites, favorites_depuis, prix_france, lier_prix_france
+from tools.lavages import stations as LAV_ST
 
 ui.page_config(ui.TOOLS_BY_KEY["carte_manuelle"]["title"])
 
@@ -104,6 +108,21 @@ def _pompes(avec_prix: bool) -> tuple[list, str]:
     return [{k: s.get(k) for k in cles if s.get(k) not in (None, "")} for s in stations], note
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def _lavages(chemin: str, mtime: float) -> tuple[list, str]:
+    return LAV_ST.charger(chemin, mtime)
+
+
+def lavages() -> tuple[list, str]:
+    src, mtime = LAV_ST.source()
+    if src is None:
+        return [], ""
+    try:
+        return _lavages(str(src), mtime)
+    except Exception as e:  # noqa: BLE001
+        return [], f"Base des stations de lavage illisible ({e})."
+
+
 # ─── Page ────────────────────────────────────────────────────────────────────
 ui.page("carte_manuelle", "Itinéraires poids lourds, péages et kilomètres par pays, traversées. La carte s’ouvre en plein écran dans un nouvel onglet.")
 
@@ -124,6 +143,7 @@ except Exception as e:
     st.stop()
 
 limites = _limites_admin()
+stations_lavage, note_lavage = lavages()
 
 
 def rendre(pompes: list) -> str:
@@ -134,6 +154,7 @@ def rendre(pompes: list) -> str:
         server_url=MAP_SERVER_URL,
         limites_admin=limites,
         pompes=json.dumps(pompes, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/"),
+        lavages=json.dumps(stations_lavage, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/"),
     )
 
 
@@ -164,6 +185,25 @@ with zone_bouton.container():
     bouton_ouvrir(html_final)
 if note_pompes:
     st.caption(note_pompes)
+if note_lavage:
+    st.caption(note_lavage)
+
+with st.expander(f"Stations de lavage · {len(stations_lavage)} sur la carte" if stations_lavage
+                 else "Stations de lavage · aucune base chargée"):
+    st.caption("La carte reprend la base géocodée de la page Optimisateur Lavages (enregistrée à chaque calcul). "
+               "Vous pouvez aussi charger ici le fichier « base_stations_lavage.xlsx » téléchargé depuis cette page. "
+               "Pour une base permanente (le cloud efface ces fichiers au redémarrage), mettez ce fichier dans le dépôt "
+               "sous transport_hub/assets/lavages_stations.xlsx.")
+    f_lav = st.file_uploader("Base géocodée des stations (Excel)", type=["xlsx", "xls"], key="cm_lav_file")
+    if f_lav is not None and st.session_state.get("cm_lav_vu") != f_lav.file_id:
+        try:
+            import pandas as pd
+            n = LAV_ST.enregistrer(pd.read_excel(f_lav))
+            st.session_state["cm_lav_vu"] = f_lav.file_id
+            st.success(f"{n} stations chargées.")
+            st.rerun()
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Fichier illisible : {e}")
 
 
 st.write("")
@@ -183,6 +223,7 @@ st.markdown(
     '<li><b>Distance et péage</b> <span>: un clic sur la case affiche le détail par pays.</span></li>'
     '<li><b>Traversées</b> <span>: choisissez la ligne de ferry ou de navette dans le bloc dédié.</span></li>'
     '<li><b>Pompes Total</b> <span>: dans Options, « Pompes Total (ma liste) » affiche la liste de la page Pompes carburant ; avec un trajet, celles à moins de 2 à 20 km du tracé sont numérotées dans l’ordre de passage, avec le prix du gazole en France.</span></li>'
+    '<li><b>Stations de lavage</b> <span>: dans Options, la base de la page Optimisateur Lavages ; avec un trajet, celles à moins de 5 à 50 km du tracé, dans l’ordre de passage, avec le prix habituel.</span></li>'
     '<li><b>Plan ou Satellite</b> <span>: dans la barre en bas de la carte, avec les types de routes et les restrictions PL.</span></li>'
     '</ul>',
     unsafe_allow_html=True,

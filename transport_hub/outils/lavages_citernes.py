@@ -25,6 +25,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from core import ui
+from tools.lavages import stations as LAV_ST  # stations pour l'option de la Carte manuelle
 
 ui.page_config(ui.TOOLS_BY_KEY["lavages"]["title"])
 
@@ -1451,6 +1452,16 @@ if frontieres is None:
 base_out = df_base[["_cle", "statut", "type", "nom", "adresse", "cp", "localite", "pays", "telephone", "email",
                     "nb", "prix_med", "prix_min", "prix_max", "dernier_prix", "dernier_lavage",
                     "lat", "lon", "precision", "rapprochement", "nom_annuaire"]].rename(columns={"_cle": "cle"})
+
+# Même base pour l'option « Stations de lavage » de la Carte manuelle (une fois par jeu de fichiers)
+_sig_lav = (len(df_geo), round(float(df_geo["lat"].sum()), 4), int(df_base["nb"].sum()))
+if st.session_state.get("lav_carte_sig") != _sig_lav:
+    try:
+        n_lav = LAV_ST.enregistrer(base_out)
+        st.session_state["lav_carte_sig"] = _sig_lav
+        st.caption(f"{n_lav} stations de lavage disponibles dans la Carte manuelle (Options → Stations de lavage).")
+    except Exception as e:  # noqa: BLE001
+        st.caption(f"Stations non transmises à la Carte manuelle ({e}).")
 base_xls = base_out.copy()
 base_xls["dernier_lavage"] = base_xls["dernier_lavage"].dt.date
 

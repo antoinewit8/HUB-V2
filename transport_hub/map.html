@@ -282,6 +282,15 @@
             font: 700 11px/18px var(--font); text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.4); cursor: pointer;
             font-variant-numeric: tabular-nums; }
         .pompe-pin:hover { transform: scale(1.12); }
+        /* Stations de lavage le long du trajet */
+        #lavages-box { display: none; margin-top: 10px; padding: 13px 14px 10px; background: #fff; border-radius: 14px; box-shadow: var(--tile); }
+        #lavages-box.show { display: block; }
+        #lavages-box .al-row { max-width: none; }
+        .al-ico.lavage { background: #0b8a8f; font-variant-numeric: tabular-nums; }
+        .lavage-pin { width: 22px; height: 22px; border-radius: 6px; background: #0b8a8f; color: #fff; border: 2px solid #fff;
+            font: 700 11px/18px var(--font); text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.4); cursor: pointer;
+            font-variant-numeric: tabular-nums; }
+        .lavage-pin:hover { transform: scale(1.12); }
         @keyframes popIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
         #co2-line { display: none; margin-top: 8px; padding: 10px 12px; background: #fff; border-radius: 14px;
             box-shadow: var(--tile); font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -678,6 +687,9 @@
                         <span class="sw"><input type="checkbox" id="eta-team" onchange="onEtaChange()"><span></span></span>
                     </label>
                 </div>
+                <label class="row" id="row-lavages" title="Stations de lavage citerne (base de la page Optimisateur Lavages) sur la carte, et celles le long du trajet">Stations de lavage
+                    <span class="sw"><input type="checkbox" id="opt-lavages" onchange="onLavagesToggle()"><span></span></span>
+                </label>
                 <label class="row" id="row-pompes" title="Ma liste de pompes Total (page Pompes carburant) sur la carte, et celles le long du trajet">Pompes Total (ma liste)
                     <span class="sw"><input type="checkbox" id="opt-pompes" onchange="onPompesToggle()"><span></span></span>
                 </label>
@@ -713,6 +725,8 @@
                 <div id="ferry-box"></div>
 
                 <div id="pompes-box"></div>
+
+                <div id="lavages-box"></div>
 
                 <div id="wp-container">
                     <button class="btn btn-save" id="btn-save" onclick="openSaveModal()" disabled>Enregistrer comme référence</button>
@@ -819,6 +833,8 @@
         // Ma liste de pompes Total (page Pompes carburant), avec le prix du gazole
         // quand il est connu. Vide si Streamlit ne la fournit pas.
         const POMPES = {{ pompes | default('[]', true) }};
+        // Stations de lavage citerne (base géocodée de la page Optimisateur Lavages)
+        const LAVAGES = {{ lavages | default('[]', true) }};
 
         // La carte s'ouvre vide par défaut. Si Streamlit fournit un tracé, on l'affiche.
         const hasInitialRoute = Array.isArray(initPolyline) && initPolyline.length > 1;
@@ -996,6 +1012,7 @@
             _initRoadTypeLayer();
             _initPLLayer();
             _initPompes();
+            _initLavages();
 
             map.on('click', onMapClick);
             map.on('contextmenu', e => addWaypoint(e.lngLat));
@@ -1119,6 +1136,7 @@
             if (map.getLayer('altLayer') && map.queryRenderedFeatures(e.point, { layers: ['altLayer'] }).length) return;
             // Clic sur une pompe de ma liste : sa fiche s'ouvre (couche pompesLayer)
             if (pompes.on && map.getLayer('pompesLayer') && map.queryRenderedFeatures(e.point, { layers: ['pompesLayer'] }).length) return;
+            if (lavages.on && map.getLayer('lavagesLayer') && map.queryRenderedFeatures(e.point, { layers: ['lavagesLayer'] }).length) return;
             // Le clic ne sert qu'à compléter ce qui manque, jamais à écraser un point posé.
             if (!origin)      setPoint('origin', e.lngLat);
             else if (!dest)   setPoint('dest',   e.lngLat);
@@ -1173,6 +1191,7 @@
             document.getElementById('btn-reset').disabled = !isModified;
             document.getElementById('btn-save').disabled  = !hasRoute;
             majPompes();
+            majLavages();
         }
 
         function _epRow(role, pt) {
@@ -1194,7 +1213,7 @@
 
         // Résumé des options actives sur la ligne du dossier replié
         const OPT_LABELS = [['opt-tolls', 'Sans péage'], ['opt-hw', 'Sans autoroute'], ['opt-traffic', 'Trafic'],
-                            ['opt-alt', 'Variantes'], ['opt-co2', 'CO₂'], ['opt-eta', 'ETA'], ['opt-pompes', 'Pompes Total']];
+                            ['opt-alt', 'Variantes'], ['opt-co2', 'CO₂'], ['opt-eta', 'ETA'], ['opt-lavages', 'Lavages'], ['opt-pompes', 'Pompes Total']];
         function updateOptsSummary() {
             const on = OPT_LABELS.filter(([id]) => document.getElementById(id).checked).map(([, l]) => l);
             const el = document.getElementById('opts-sum');
@@ -1305,7 +1324,7 @@
 
         // Stations à moins de « couloir » km du tracé, avec le km de passage.
         // Projection locale équirectangulaire : assez précis pour quelques km d'écart.
-        function _pompesSurTrajet(coords, couloir) {
+        function _pompesSurTrajet(coords, couloir, liste) {
             if (!coords || coords.length < 2) return [];
             const lat0 = coords[Math.floor(coords.length / 2)][1] * Math.PI / 180;
             const kx = 111.32 * Math.cos(lat0), ky = 110.57;
@@ -1315,7 +1334,7 @@
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             pts.forEach(([x, y]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); });
             const out = [];
-            POMPES.forEach(s => {
+            (liste || POMPES).forEach(s => {
                 const px = s.lo * kx, py = s.la * ky;
                 if (px < minX - couloir || px > maxX + couloir || py < minY - couloir || py > maxY + couloir) return;
                 let best = Infinity, kmAt = 0;
@@ -1378,6 +1397,155 @@
             const s = POMPES[i];
             map.flyTo({ center: [s.lo, s.la], zoom: Math.max(map.getZoom(), 12), duration: 600 });
             setTimeout(() => _pompePopup(s), 620);
+        }
+
+
+        // ═══════════════════════════════════════════════════════
+        //  STATIONS DE LAVAGE (base de la page Optimisateur Lavages)
+        // ═══════════════════════════════════════════════════════
+        // Même principe que les pompes : toutes les stations en couche « circle »
+        // (dessinée par la carte, quelques centaines de points sans effet sur la
+        // fluidité) ; avec un tracé, celles du couloir sont numérotées.
+        const COULOIRS_LAV = [5, 10, 25, 50];
+        const lavages = { on: false, couloir: 10, cle: null, liste: [], pins: [], popup: null };
+        try {
+            lavages.on = localStorage.getItem('cm_lavages') === '1' && LAVAGES.length > 0;
+            const c = +localStorage.getItem('cm_lavages_km');
+            if (COULOIRS_LAV.includes(c)) lavages.couloir = c;
+        } catch (e) {}
+
+        function _lavageGeo(trajet) {
+            const sur = new Set(trajet.map(t => t.s.i));
+            return { type: 'FeatureCollection', features: LAVAGES.map(s => ({
+                type: 'Feature', id: s.i,
+                properties: { i: s.i, on: sur.has(s.i) ? 1 : 0, route: trajet.length ? 1 : 0, nb: s.nb || 0 },
+                geometry: { type: 'Point', coordinates: [s.lo, s.la] }
+            })) };
+        }
+
+        function _initLavages() {
+            LAVAGES.forEach((s, i) => { s.i = i; });
+            const row = document.getElementById('row-lavages');
+            if (!LAVAGES.length) { if (row) row.style.display = 'none'; return; }
+            document.getElementById('opt-lavages').checked = lavages.on;
+            map.addSource('lavagesSource', { type: 'geojson', data: _lavageGeo([]) });
+            map.addLayer({
+                id: 'lavagesLayer', type: 'circle', source: 'lavagesSource',
+                layout: { visibility: lavages.on ? 'visible' : 'none' },
+                paint: {
+                    // plus gros pour les stations souvent utilisées
+                    'circle-radius': ['interpolate', ['linear'], ['zoom'],
+                        5, ['case', ['>=', ['get', 'nb'], 5], 4.5, 3.2],
+                        9, ['case', ['>=', ['get', 'nb'], 5], 7, 5.5],
+                        13, ['case', ['>=', ['get', 'nb'], 5], 9, 7.5]],
+                    'circle-color': ['case', ['>', ['get', 'nb'], 0], '#0b8a8f', '#8fc9cb'],
+                    'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.6,
+                    'circle-opacity': ['case', ['all', ['==', ['get', 'route'], 1], ['==', ['get', 'on'], 0]], 0.35, 0.95],
+                    'circle-stroke-opacity': ['case', ['all', ['==', ['get', 'route'], 1], ['==', ['get', 'on'], 0]], 0.35, 1]
+                }
+            });
+            lavages.popup = new maplibregl.Popup({ offset: 10, closeButton: true, maxWidth: '280px' });
+            map.on('click', 'lavagesLayer', e => {
+                e.preventDefault();
+                _lavagePopup(LAVAGES[e.features[0].properties.i]);
+            });
+            map.on('mouseenter', 'lavagesLayer', () => { map.getCanvas().style.cursor = 'pointer'; });
+            map.on('mouseleave', 'lavagesLayer', () => { map.getCanvas().style.cursor = ''; });
+            updateOptsSummary();
+            majLavages(true);
+        }
+
+        function _prix2(v) {
+            if (v == null) return '';
+            const d = Number.isInteger(v) ? 0 : 2;
+            return v.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }) + ' €';
+        }
+        function _dateFr(d) { return d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : ''; }
+
+        function _lavagePopup(s) {
+            const t = lavages.liste.find(x => x.s === s);
+            const lignes = [`<div class="popup-label">${esc(s.n)}</div>`];
+            if (s.a) lignes.push(`<div>${esc(s.a)}</div>`);
+            lignes.push(`<div>${esc([s.cp, s.v].filter(Boolean).join(' '))}${s.p ? ' · ' + esc(s.p) : ''}</div>`);
+            if (s.tel) lignes.push(`<div><a href="tel:${esc(s.tel.replace(/\s+/g, ''))}">${esc(s.tel)}</a></div>`);
+            if (s.nb) {
+                lignes.push(`<div style="margin-top:4px;color:#0b8a8f;font-weight:600">${s.nb} lavage${s.nb > 1 ? 's' : ''} dans l'historique</div>`);
+                const px = [s.pm != null ? `prix médian <b>${_prix2(s.pm)}</b>` : '', s.pd != null ? `dernier ${_prix2(s.pd)}` : ''].filter(Boolean);
+                if (px.length) lignes.push(`<div>${px.join(' · ')}</div>`);
+                if (s.dl) lignes.push(`<div style="color:var(--sub);font-size:12px">Dernier lavage le ${_dateFr(s.dl)}</div>`);
+            } else {
+                lignes.push(`<div style="margin-top:4px;color:var(--sub)">Dans l'annuaire, jamais utilisée</div>`);
+            }
+            if (t) lignes.push(`<div style="color:var(--sub)">Au km ${Math.round(t.km)} du trajet · à ${_km1(t.d)} km du tracé</div>`);
+            lignes.push(`<div style="margin-top:8px"></div>`);
+            if (origin && dest) lignes.push(`<button class="popup-btn popup-btn-waypoint" onclick="_lavageEtape(${s.i})">Ajouter comme étape</button>`);
+            lignes.push(`<a class="popup-btn popup-btn-cancel" style="display:grid;place-items:center;text-decoration:none" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${s.la},${s.lo}">Ouvrir dans Google Maps</a>`);
+            lavages.popup.setLngLat([s.lo, s.la]).setHTML(lignes.join('')).addTo(map);
+        }
+
+        function _lavageEtape(i) {
+            const s = LAVAGES[i];
+            lavages.popup.remove();
+            addWaypoint({ lng: s.lo, lat: s.la }, `${s.n}${s.v ? ', ' + s.v : ''}`);
+        }
+
+        function onLavagesToggle() {
+            lavages.on = document.getElementById('opt-lavages').checked;
+            try { localStorage.setItem('cm_lavages', lavages.on ? '1' : '0'); } catch (e) {}
+            updateOptsSummary();
+            if (map.getLayer('lavagesLayer')) map.setLayoutProperty('lavagesLayer', 'visibility', lavages.on ? 'visible' : 'none');
+            if (!lavages.on && lavages.popup) lavages.popup.remove();
+            majLavages(true);
+            if (lavages.on && !hasRoute) toast(`${LAVAGES.length} stations de lavage affichées. Calculez un trajet pour voir celles sur la route.`, 'info');
+        }
+
+        function setCouloirLav(km) {
+            lavages.couloir = km;
+            try { localStorage.setItem('cm_lavages_km', String(km)); } catch (e) {}
+            majLavages(true);
+        }
+
+        function majLavages(force) {
+            if (!map.getSource || !map.getSource('lavagesSource')) return;
+            const coords = hasRoute ? geojsonCoords : null;
+            if (!force && lavages.cle && lavages.cle.coords === coords && lavages.cle.km === lavages.couloir && lavages.cle.on === lavages.on) return;
+            lavages.cle = { coords, km: lavages.couloir, on: lavages.on };
+            lavages.liste = lavages.on && coords ? _pompesSurTrajet(coords, lavages.couloir, LAVAGES) : [];
+            map.getSource('lavagesSource').setData(_lavageGeo(lavages.liste));
+            lavages.pins.forEach(m => m.remove());
+            lavages.pins = lavages.liste.slice(0, 60).map((t, k) => {
+                const el = document.createElement('div');
+                el.className = 'lavage-pin'; el.textContent = k + 1;
+                el.title = `${t.s.n} · km ${Math.round(t.km)}`;
+                el.addEventListener('click', ev => { ev.stopPropagation(); _lavagePopup(t.s); });
+                return new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([t.s.lo, t.s.la]).addTo(map);
+            });
+            _lavagesBox();
+        }
+
+        function _lavagesBox() {
+            const box = document.getElementById('lavages-box');
+            if (!lavages.on || !hasRoute) { box.classList.remove('show'); box.innerHTML = ''; return; }
+            const L = lavages.liste, MAX = 40;
+            const seg = COULOIRS_LAV.map(k => `<button class="${k === lavages.couloir ? 'on' : ''}" onclick="setCouloirLav(${k})">${k} km</button>`).join('');
+            const rows = L.slice(0, MAX).map((t, k) => `
+                <button class="al-row" onclick="_lavageFocus(${t.s.i})">
+                    <span class="al-ico lavage">${k + 1}</span>
+                    <span class="al-txt">${esc(t.s.n)}<small>${esc(t.s.v || '')} · à ${_km1(t.d)} km du tracé${t.s.nb ? ` · ${t.s.nb} lavage${t.s.nb > 1 ? 's' : ''}` : ' · jamais utilisée'}${t.s.pm != null ? ` · <b>${_prix2(t.s.pm)}</b>` : ''}</small></span>
+                    <span class="al-km">km ${Math.round(t.km)}</span>
+                </button>`).join('');
+            box.innerHTML = `<div class="bx-title">Stations de lavage sur le trajet · ${L.length}</div>
+                <div class="seg pompe-seg" role="group" aria-label="Distance maximale au tracé">${seg}</div>
+                ${L.length ? rows : `<div class="bx-hint">Aucune station de lavage à moins de ${lavages.couloir} km du tracé.</div>`}
+                ${L.length > MAX ? `<div class="bx-hint">+ ${L.length - MAX} autres plus loin sur le trajet.</div>` : ''}
+                <div class="bx-hint">Distance à vol d'oiseau entre la station et le tracé. Prix = prix médian des lavages de l'historique.</div>`;
+            box.classList.add('show');
+        }
+
+        function _lavageFocus(i) {
+            const s = LAVAGES[i];
+            map.flyTo({ center: [s.lo, s.la], zoom: Math.max(map.getZoom(), 12), duration: 600 });
+            setTimeout(() => _lavagePopup(s), 620);
         }
 
         // ═══════════════════════════════════════════════════════

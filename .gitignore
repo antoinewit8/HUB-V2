@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 transport_hub/data/renta_cache/
 transport_hub/data/pompes/
+transport_hub/data/lavages/
