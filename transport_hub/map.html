@@ -280,15 +280,18 @@
         #co2-line small { color: var(--sub); font-size: 11.5px; text-align: right; }
         .bx-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
         /* ETA client (temps de conduite UE) */
-        #eta-opts { display: none; padding: 2px 0 10px; }
-        #eta-opts.show { display: grid; gap: 8px; }
-        #eta-opts .eo { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--sub); }
+        #eta-opts { display: none; margin: 0 0 4px; padding: 10px 12px; background: var(--soft); border-radius: 12px; }
+        #eta-opts.show { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+        #eta-opts .eo-l { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--sub); margin-bottom: 4px; }
+        #eta-opts input[type="datetime-local"] { flex: 1; min-width: 0; width: 100%; box-sizing: border-box; }
         #eta-opts input[type="datetime-local"], #eta-opts input[type="number"] { font: inherit; font-size: 13px; color: var(--text);
-            border: .5px solid var(--hair); border-radius: 8px; padding: 5px 7px; background: #fff; font-variant-numeric: tabular-nums; }
-        #eta-opts input[type="number"] { width: 64px; text-align: right; }
-        #eta-opts .eo-now { border: none; background: var(--soft); color: var(--blue); border-radius: 980px; padding: 4px 10px;
-            font: 500 12px var(--font); cursor: pointer; }
-        #eta-opts .eo-team { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
+            border: .5px solid var(--hair); border-radius: 8px; padding: 6px 8px; background: #fff; font-variant-numeric: tabular-nums; }
+        #eta-opts input[type="number"] { width: 58px; box-sizing: border-box; text-align: right; }
+        #eta-opts .eo-now { border: none; background: none; color: var(--blue); padding: 0; font: 500 12px var(--font); cursor: pointer; }
+        #eta-opts .eo-now:hover { text-decoration: underline; }
+        #eta-opts .eo { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--text); }
+        #eta-opts .eo-u { display: flex; align-items: center; gap: 5px; color: var(--sub); font-size: 12px; }
+        #eta-opts .sw { transform: scale(.8); transform-origin: right center; margin: -3px 0; }
         #eta-box { display: none; margin-top: 8px; padding: 12px 14px; background: #fff; border-radius: 14px; box-shadow: var(--tile);
             font-size: 13px; font-variant-numeric: tabular-nums; }
         #eta-box.show { display: block; }
@@ -652,18 +655,18 @@
                     <span class="sw"><input type="checkbox" id="opt-eta" onchange="onEtaToggle()"><span></span></span>
                 </label>
                 <div id="eta-opts">
-                    <div class="eo"><span>Départ</span>
-                        <span style="display:flex;gap:6px;align-items:center">
-                            <input type="datetime-local" id="eta-depart" step="300" onchange="onEtaChange()">
+                    <div>
+                        <span class="eo-l">Départ
                             <button type="button" class="eo-now" onclick="etaMaintenant()" title="Partir maintenant">Maintenant</button>
                         </span>
+                        <input type="datetime-local" id="eta-depart" step="300" onchange="onEtaChange()" aria-label="Heure de départ">
                     </div>
-                    <div class="eo"><span title="Chargement / déchargement à chaque étape intermédiaire (pas au départ ni à l'arrivée)">Arrêt à chaque étape (min)</span>
-                        <input type="number" id="eta-service" min="0" max="600" step="5" value="0" onchange="onEtaChange()">
+                    <div class="eo"><span title="Chargement / déchargement à chaque étape intermédiaire (pas au départ ni à l'arrivée)">Arrêt à chaque étape</span>
+                        <span class="eo-u"><input type="number" id="eta-service" min="0" max="600" step="5" value="0" onchange="onEtaChange()" aria-label="Arrêt à chaque étape en minutes">min</span>
                     </div>
-                    <div class="eo"><span>Équipage</span>
-                        <label class="eo-team"><input type="checkbox" id="eta-team" onchange="onEtaChange()"> Double équipage</label>
-                    </div>
+                    <label class="eo" style="cursor:pointer">Double équipage
+                        <span class="sw"><input type="checkbox" id="eta-team" onchange="onEtaChange()"><span></span></span>
+                    </label>
                 </div>
                 <label class="row" id="row-pompes" title="Ma liste de pompes Total (page Pompes carburant) sur la carte, et celles le long du trajet">Pompes Total (ma liste)
                     <span class="sw"><input type="checkbox" id="opt-pompes" onchange="onPompesToggle()"><span></span></span>
