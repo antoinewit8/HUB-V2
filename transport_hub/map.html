@@ -3634,13 +3634,13 @@
 
         const TYPE_RANK = {
             city: 0, town: 1, municipality: 1, village: 2, hamlet: 3, locality: 3,
-            district: 4, county: 5, state: 6, country: 7, street: 8, house: 9, other: 10
+            district: 4, county: 5, state: 6, country: 7, street: 8, house: 9, other: 10, poi: 10
         };
         const TYPE_LABEL = {
             city: 'ville', town: 'ville', municipality: 'commune', village: 'village',
             hamlet: 'lieu-dit', locality: 'lieu-dit', district: 'quartier',
             county: 'région', state: 'région', country: 'pays',
-            street: 'rue', house: 'adresse', other: ''
+            street: 'rue', house: 'adresse', other: '', poi: 'société'
         };
 
         // head  : ligne principale (nom du lieu ou numéro + rue)
@@ -3648,15 +3648,19 @@
         // full  : libellé complet mis dans les cases départ/arrivée
         // short : libellé court pour la liste des étapes
         function hitLabel(h) {
-            const head = (h.housenumber && h.street ? `${h.housenumber} ${h.street}`
-                                                    : (h.name || h.street || h.city)) || h.country || '';
+            // Société / lieu nommé : son nom en titre, la rue en dessous
+            const nomme = h.type === 'poi' && h.name;
+            const rue = h.street ? [h.street, h.housenumber].filter(Boolean).join(' ') : '';
+            const head = nomme ? h.name
+                : ((h.housenumber && h.street ? `${h.housenumber} ${h.street}`
+                                              : (h.name || h.street || h.city)) || h.country || '');
             const city = h.city && _norm(h.city) !== _norm(head) ? h.city : '';
             const region = h.region && ![head, h.city, h.country].some(x => _norm(x) === _norm(h.region))
                            ? h.region : '';
-            const subParts = [city, region, h.country].filter(Boolean);
+            const subParts = [nomme ? rue : '', city, region, h.country].filter(Boolean);
 
             const full = city
-                ? [head, [h.postcode, city].filter(Boolean).join(' '), h.country]
+                ? [head, nomme ? rue : '', [h.postcode, city].filter(Boolean).join(' '), h.country]
                 : [[h.postcode, head].filter(Boolean).join(' '), h.country];
 
             return {
@@ -3793,6 +3797,23 @@
             return it ? _geoapifyHit(it) : null;
         }
 
+        // ── Sociétés par leur nom : PTV Places (via le serveur carte, qui garde la clé) ──
+        // « liprovit kampen » → la société avec son adresse. En parallèle des adresses ;
+        // ignoré sans réponse en 4 s (serveur endormi) pour ne pas bloquer la saisie.
+        async function _ptvPlaces(q, cc, signal) {
+            if (_norm(q).length < 4) return [];
+            const r = await _fetchT(`${serverUrl}/api/places?q=${encodeURIComponent(q)}`
+                                    + (cc ? `&country=${cc}` : ''), { ms: 4000, signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return ((await r.json()).places || []).map(p => ({
+                lat: +p.lat, lng: +p.lng, name: p.name || '',
+                street: p.street || '', housenumber: p.housenumber || '',
+                postcode: _pc(p.postcode), city: p.city || '', region: p.region || '',
+                country: p.country || '', cc: (p.cc || '').toUpperCase(),
+                type: 'poi', src: 'PTV'
+            })).filter(h => h.name && isFinite(h.lat) && isFinite(h.lng));
+        }
+
         // Cache : relancer la même recherche ne refait pas d'appel.
         const GEO_CACHE_MS = 30 * 60 * 1000;
         const _geoCache = new Map();
@@ -3808,6 +3829,7 @@
             const c = _geoCache.get(key);
             if (c && Date.now() - c.t < GEO_CACHE_MS) { lastGeoSource = c.source; return _clone(c.hits); }
 
+            const socP = _ptvPlaces(q, cc, signal).catch(e => { if (!(signal && signal.aborted)) console.warn('PTV places', e); return []; });
             const sources = [];
             if (HAS_GEOAPIFY) sources.push(['Geoapify', () => _geoapify(q, cc, signal)]);
             if (full || !HAS_GEOAPIFY) sources.push(['OSM', () => _nominatim(q, cc, signal)]);
@@ -3828,11 +3850,13 @@
                     notes.push(name + ' : ' + e.message);
                 }
             }
-            if (!hits.length) {
+            const societes = await socP;
+            if (!hits.length && !societes.length) {
                 lastGeoSource = notes.join(', ');
                 lastGeoFailed = failed;
                 return [];
             }
+            if (!lastGeoSource) lastGeoSource = 'PTV';
 
             const nq = _norm(q.split(',')[0]);
             hits.sort((a, b) => {
@@ -3843,10 +3867,13 @@
                 return (_norm(a.name).startsWith(nq) ? 0 : 1) - (_norm(b.name).startsWith(nq) ? 0 : 1);
             });
 
+            // Sociétés trouvées par leur nom en tête : c'est ce qui est cherché quand elles sortent.
+            const tout = [...societes.slice(0, 4), ...hits];
+
             // Doublons : le nœud de la ville et le contour de la commune arrivent
             // souvent tous les deux. Même nom + même pays à moins de 5 km = même lieu.
             const kept = [];
-            for (const h of hits) {
+            for (const h of tout) {
                 const twin = kept.find(k => k.cc === h.cc && _norm(k.name) === _norm(h.name)
                                          && _norm(k.housenumber) === _norm(h.housenumber)
                                          && _distKm(k, h) < 5);
