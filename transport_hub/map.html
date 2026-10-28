@@ -130,11 +130,6 @@
         .sg-foot { margin-top: 4px; padding: 8px 10px 5px; font-size: 12px; color: var(--sub); border-top: .5px solid var(--hair); }
         .sg-more { color: var(--blue); cursor: pointer; font-weight: 500; }
         .sg-more:hover { text-decoration: underline; }
-        .sg-gm { margin-top: 4px; padding: 8px 10px; border-radius: 9px; cursor: pointer; font-size: 12.5px; color: var(--text); }
-        .sg-gm b { color: var(--blue); font-weight: 500; }
-        .sg-gm small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--sub); }
-        .sg-gm:hover { background: var(--bg); }
-        .sg-status .sg-gm { margin: 8px -10px -6px; }
 
         .hit-main { flex: 1; min-width: 0; }
         .hit-head { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1627,8 +1622,6 @@
         document.getElementById('ep-suggest').addEventListener('mousedown', e => {
             e.preventDefault();
             if (!sg.role) return;
-            const gm = e.target.closest('.sg-gm');
-            if (gm) { ouvrirGoogleMaps(gm.dataset.q); return; }
             const more = e.target.closest('.sg-more');
             if (more) { _scheduleSuggest(_epInput(sg.role).value, true, true); return; }
             const item = e.target.closest('.sg-item');
@@ -1715,7 +1708,7 @@
             clearTimeout(sg.timer);
             const q = (raw || '').trim();
             if (q.length < 3) { closeSuggest(); return; }
-            if (full || _parseCoords(q) || GMAPS_RE.test(q) || HAS_GEOAPIFY) {
+            if (full || _parseCoords(q) || HAS_GEOAPIFY) {
                 sg.timer = setTimeout(() => _runSuggest(q, full), immediate ? 0 : 250);
                 return;
             }
@@ -1730,20 +1723,6 @@
             if (sg.ctrl) sg.ctrl.abort();
             sg.ctrl = new AbortController();
             const signal = sg.ctrl.signal;
-
-            if (GMAPS_RE.test(q)) {
-                _suggestStatus('Lecture du lien Google Maps…');
-                try {
-                    const h = await _hitGmaps(q, signal);
-                    if (seq !== sg.seq) return;
-                    sg.hits = [h]; sg.query = q; sg.active = 0;
-                    _renderSuggest();
-                } catch (e) {
-                    if (signal.aborted || seq !== sg.seq) return;
-                    _suggestStatus('Lien Google Maps illisible — ' + esc(e.message), true);
-                }
-                return;
-            }
 
             const c = _parseCoords(q);
             if (c) {
@@ -1768,16 +1747,14 @@
                 if (!hits.length) {
                     const pays = _countryFilter() ? ' dans ce pays' : '';
                     const osm = '<span class="sg-more">Recherche OSM</span>';
-                    const gm = `<div class="sg-gm" data-q="${esc(q)}"><b>Chercher « ${esc(q)} » sur Google Maps</b>`
-                             + `<small>puis copiez le lien du lieu (Partager) et collez-le ici</small></div>`;
                     if (full) {
                         _suggestStatus(lastGeoFailed
                             ? `Recherche impossible (${esc(lastGeoSource)}). <span class="sg-more">Réessayer</span>`
-                            : `Rien trouvé pour « ${esc(q)} »${pays}${gm}`, lastGeoFailed);
+                            : `Rien trouvé pour « ${esc(q)} »${pays}`, lastGeoFailed);
                     } else {
                         _suggestStatus(lastGeoFailed
                             ? `Suggestions indisponibles (${esc(lastGeoSource)}). ${osm}`
-                            : `Aucune suggestion${pays}. ${osm}${gm}`, lastGeoFailed);
+                            : `Aucune suggestion${pays}. ${osm}`, lastGeoFailed);
                     }
                     return;
                 }
@@ -1798,10 +1775,7 @@
                 `<div class="sg-item${i === sg.active ? ' active' : ''}" data-i="${i}"
                       title="${esc(hitLabel(h).full)}">${hitHTML(h)}</div>`
             ).join('')
-            + (sg.query && !GMAPS_RE.test(sg.query)
-                ? `<div class="sg-gm" data-q="${esc(sg.query)}">Pas dans la liste ? <b>Chercher « ${esc(sg.query)} » sur Google Maps</b>`
-                  + `<small>puis copiez le lien du lieu (Partager) et collez-le ici</small></div>` : '')
-            + `<div class="sg-foot">${lastGeoSource.startsWith('Geoapify')
+            + `<div class="sg-foot">${lastGeoSource === 'Geoapify'
                 ? 'Powered by Geoapify · © OpenStreetMap · <span class="sg-more">Recherche OSM</span>'
                 : '© OpenStreetMap'}</div>`;
             box.classList.add('show');
@@ -3660,13 +3634,13 @@
 
         const TYPE_RANK = {
             city: 0, town: 1, municipality: 1, village: 2, hamlet: 3, locality: 3,
-            district: 4, county: 5, state: 6, country: 7, street: 8, house: 9, other: 10, poi: 10
+            district: 4, county: 5, state: 6, country: 7, street: 8, house: 9, other: 10
         };
         const TYPE_LABEL = {
             city: 'ville', town: 'ville', municipality: 'commune', village: 'village',
             hamlet: 'lieu-dit', locality: 'lieu-dit', district: 'quartier',
             county: 'région', state: 'région', country: 'pays',
-            street: 'rue', house: 'adresse', other: '', poi: 'lieu', gmaps: 'Google Maps'
+            street: 'rue', house: 'adresse', other: ''
         };
 
         // head  : ligne principale (nom du lieu ou numéro + rue)
@@ -3674,19 +3648,15 @@
         // full  : libellé complet mis dans les cases départ/arrivée
         // short : libellé court pour la liste des étapes
         function hitLabel(h) {
-            // Lieu nommé (entreprise, lien Google Maps) : son nom en titre, la rue en dessous
-            const nomme = (h.type === 'poi' || h.type === 'gmaps') && h.name;
-            const rue = h.street ? [h.street, h.housenumber].filter(Boolean).join(' ') : '';
-            const head = nomme ? h.name
-                : ((h.housenumber && h.street ? `${h.housenumber} ${h.street}`
-                                              : (h.name || h.street || h.city)) || h.country || '');
+            const head = (h.housenumber && h.street ? `${h.housenumber} ${h.street}`
+                                                    : (h.name || h.street || h.city)) || h.country || '';
             const city = h.city && _norm(h.city) !== _norm(head) ? h.city : '';
             const region = h.region && ![head, h.city, h.country].some(x => _norm(x) === _norm(h.region))
                            ? h.region : '';
-            const subParts = [nomme ? rue : '', city, region, h.country].filter(Boolean);
+            const subParts = [city, region, h.country].filter(Boolean);
 
             const full = city
-                ? [head, nomme ? rue : '', [h.postcode, city].filter(Boolean).join(' '), h.country]
+                ? [head, [h.postcode, city].filter(Boolean).join(' '), h.country]
                 : [[h.postcode, head].filter(Boolean).join(' '), h.country];
 
             return {
@@ -3823,74 +3793,6 @@
             return it ? _geoapifyHit(it) : null;
         }
 
-        // ── Photon (komoot) : noms de lieux OSM — entreprises, usines, commerces, dépôts ──
-        // Interrogé en parallèle : Geoapify trouve les adresses, Photon les lieux
-        // nommés (« liprovit kampen »). Gardés seulement si leur nom contient un mot tapé.
-        const PHOTON_EXCLUS = new Set(['place', 'highway', 'boundary', 'landuse', 'natural', 'waterway', 'railway', 'route']);
-        async function _photonPOI(q, cc, signal) {
-            const c = map.getCenter();
-            const url = 'https://photon.komoot.io/api/?limit=10&lang=fr&q=' + encodeURIComponent(q)
-                      + `&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`;
-            const r = await _fetchT(url, { ms: 5000, signal });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            const mots = _norm(q).split(' ').filter(w => w.length >= 3);
-            return ((await r.json()).features || []).map(f => {
-                const p = f.properties || {}, g = f.geometry && f.geometry.coordinates;
-                if (!g || !p.name || PHOTON_EXCLUS.has(p.osm_key)) return null;
-                const nn = _norm(p.name);
-                if (!mots.some(w => nn.includes(w))) return null;
-                const cc2 = (p.countrycode || '').toUpperCase();
-                if (cc && cc2 && cc2 !== cc) return null;
-                return {
-                    lat: +g[1], lng: +g[0], name: p.name,
-                    street: p.street || '', housenumber: p.housenumber || '',
-                    postcode: _pc(p.postcode), city: p.city || p.town || p.village || p.district || '',
-                    region: p.county || p.state || '', country: p.country || '', cc: cc2,
-                    type: 'poi', src: 'Photon'
-                };
-            }).filter(Boolean);
-        }
-
-        // ── Lien Google Maps collé dans un champ ──
-        // Lien complet : coordonnées lues dans le lien (!3d…!4d… = le lieu, @… = le centre de la vue).
-        // Lien court (maps.app.goo.gl) : résolu par le serveur carte (redirection non lisible ici).
-        const GMAPS_RE = /^https?:\/\/(maps\.app\.goo\.gl|goo\.gl|g\.co|maps\.google\.[a-z.]+|(www\.)?google\.[a-z.]+\/maps)/i;
-        function _lireLienGmaps(u) {
-            let m = /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/.exec(u)
-                 || /[?&](?:q|query|ll|destination|daddr)=(-?\d+\.\d+)(?:,|%2C)\s*(-?\d+\.\d+)/i.exec(u)
-                 || /@(-?\d+\.\d+),(-?\d+\.\d+)/.exec(u);
-            if (!m) return null;
-            const lat = +m[1], lng = +m[2];
-            if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
-            let nom = '';
-            const pm = /\/maps\/place\/([^/@?]+)/.exec(u);
-            if (pm) { try { nom = decodeURIComponent(pm[1].replace(/\+/g, ' ')); } catch (e) { nom = pm[1]; } }
-            return { lat, lng, nom };
-        }
-        async function _hitGmaps(u, signal) {
-            let r = _lireLienGmaps(u);
-            if (!r) {
-                const resp = await _fetchT(`${serverUrl}/api/resolve_link?url=${encodeURIComponent(u)}`, { ms: 15000, signal });
-                if (!resp.ok) throw new Error('lien Google Maps non résolu (HTTP ' + resp.status + ')');
-                r = _lireLienGmaps((await resp.json()).url || '');
-            }
-            if (!r) throw new Error('pas de position dans ce lien Google Maps');
-            const h = { lat: r.lat, lng: r.lng, name: r.nom || 'Lieu Google Maps', street: '', housenumber: '',
-                        postcode: '', city: '', region: '', country: '', cc: '', type: 'gmaps', src: 'Google Maps' };
-            // Adresse la plus proche pour la ligne du dessous (sans bloquer)
-            try {
-                const a = await reverseHit(r.lat, r.lng);
-                if (a) Object.assign(h, { street: a.street || '', housenumber: a.housenumber || '', postcode: a.postcode || '',
-                                          city: a.city || '', region: a.region || '', country: a.country || '', cc: a.cc || '' });
-            } catch (e) {}
-            return h;
-        }
-        function ouvrirGoogleMaps(q) {
-            const c = map.getCenter();
-            window.open('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q)
-                        + `&center=${c.lat.toFixed(4)},${c.lng.toFixed(4)}`, '_blank', 'noopener');
-        }
-
         // Cache : relancer la même recherche ne refait pas d'appel.
         const GEO_CACHE_MS = 30 * 60 * 1000;
         const _geoCache = new Map();
@@ -3906,7 +3808,6 @@
             const c = _geoCache.get(key);
             if (c && Date.now() - c.t < GEO_CACHE_MS) { lastGeoSource = c.source; return _clone(c.hits); }
 
-            const poiP = _photonPOI(q, cc, signal).catch(e => { if (!(signal && signal.aborted)) console.warn('Photon', e); return []; });
             const sources = [];
             if (HAS_GEOAPIFY) sources.push(['Geoapify', () => _geoapify(q, cc, signal)]);
             if (full || !HAS_GEOAPIFY) sources.push(['OSM', () => _nominatim(q, cc, signal)]);
@@ -3914,7 +3815,6 @@
             let hits = [];
             const notes = [];
             let failed = false;
-            // (hits est réaffecté plus bas : lieux nommés + adresses)
             for (const [name, fn] of sources) {
                 try {
                     let res = await fn();
@@ -3928,9 +3828,7 @@
                     notes.push(name + ' : ' + e.message);
                 }
             }
-            const pois = await poiP;
-            if (pois.length) lastGeoSource = lastGeoSource ? lastGeoSource + ' + Photon' : 'Photon';
-            if (!hits.length && !pois.length) {
+            if (!hits.length) {
                 lastGeoSource = notes.join(', ');
                 lastGeoFailed = failed;
                 return [];
@@ -3944,10 +3842,6 @@
                 if (ra !== rb) return ra - rb;
                 return (_norm(a.name).startsWith(nq) ? 0 : 1) - (_norm(b.name).startsWith(nq) ? 0 : 1);
             });
-
-            // Lieux nommés (entreprises…) avant les adresses : c'est ce qui est cherché
-            // quand le nom tapé correspond. Les adresses ne gardent que 5 places.
-            hits = [...pois.slice(0, 4), ...hits];
 
             // Doublons : le nœud de la ville et le contour de la commune arrivent
             // souvent tous les deux. Même nom + même pays à moins de 5 km = même lieu.
@@ -4046,7 +3940,7 @@
 
             try {
                 const cc = _countryFilter();
-                const hits = GMAPS_RE.test(q) ? [await _hitGmaps(q)] : await geocodeQuery(q, cc);
+                const hits = await geocodeQuery(q, cc);
                 if (seq !== searchSeq) return;
                 searchHits = hits;
 
