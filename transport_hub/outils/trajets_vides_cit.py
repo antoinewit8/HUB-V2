@@ -20,6 +20,7 @@ import streamlit as st
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from core import ptv, ui  # noqa: E402
+from core.duree import excel_heures, fmt_h, vers_jours  # noqa: E402
 from tools.trajets_vides import engine as T  # noqa: E402
 from tools.werbomont import engine as E  # noqa: E402
 
@@ -226,7 +227,7 @@ for _, r in top.iterrows():
         <div class="chips">
           <span class="chip green">{nb(r['renta'], 2)} €/km</span>
           <span class="chip blue">{esc(vide_txt)}{esc(lav)}</span>
-          <span class="chip gray">rechargé en {nb(r['ecart_h_median'])} h (médiane)</span>
+          <span class="chip gray">rechargé en {fmt_h(r['ecart_h_median'])} (médiane)</span>
           <span class="chip orange">{int(r['frequence'])}× · {int(r['citernes'])} citerne(s)</span>
           <span class="chip gray">prix moyen {nb(r['prix_moyen'])} €</span>
         </div>
@@ -270,7 +271,7 @@ if dest:
             e3.metric("Renta historique", f"{nb(ev.get('renta_hist'), 2)} €/km")
         if ev["historique"]:
             st.caption(f"Historique : prix moyen {nb(ev.get('prix_moyen'))} €, rechargé en "
-                       f"{nb(ev.get('ecart_h_median'))} h (médiane).")
+                       f"{fmt_h(ev.get('ecart_h_median'))} (médiane).")
         ref = ev.get("renta_estimee", ev.get("renta_hist"))
         if ref is not None and pd.notna(ref) and cand["renta"].notna().any():
             rang = int((cand["renta"] > ref).sum()) + 1
@@ -315,30 +316,30 @@ except ImportError:
 tab = cand.rename(columns={
     "rang": "Rang", "lieu": "Lieu de rechargement", "frequence": "Fréquence", "citernes": "Citernes",
     "renta": "Renta (€/km)", "km_vide_moyen": "Km à vide moyen", "part_lavage": "Part avec lavage",
-    "ecart_h_median": "Rechargé en (h, médiane)", "prix_moyen": "Prix moyen (€)",
+    "ecart_h_median": "Rechargé en (médiane)", "prix_moyen": "Prix moyen (€)",
     "km_charge_moyen": "Km chargés moyen", "dernier": "Dernière fois", "clients": "Clients",
     "produits": "Produits", "chauffeurs": "Chauffeurs"})[
     ["Rang", "Lieu de rechargement", "Renta (€/km)", "Fréquence", "Citernes", "Km à vide moyen",
-     "Part avec lavage", "Rechargé en (h, médiane)", "Prix moyen (€)", "Km chargés moyen", "Dernière fois",
+     "Part avec lavage", "Rechargé en (médiane)", "Prix moyen (€)", "Km chargés moyen", "Dernière fois",
      "Clients", "Produits", "Chauffeurs"]]
 detail = zone.rename(columns={
     "dossier": "Dossier déchargé", "A_ville": "Déchargé à", "A_dt": "Déchargé le",
     "dossier_suivant": "Dossier suivant", "B_ville": "Rechargé à", "B_dt": "Rechargé le",
-    "ecart_h": "Écart (h)", "km_vide": "Km à vide", "lavage_noms": "Lavage", "prix_suivant": "Prix suivant (€)",
+    "ecart_h": "Écart", "km_vide": "Km à vide", "lavage_noms": "Lavage", "prix_suivant": "Prix suivant (€)",
     "km_charge_suivant": "Km chargés suivant", "renta": "Renta (€/km)", "remorque": "Remorque",
     "tracteur": "Tracteur", "chauffeur": "Chauffeur", "client_suivant": "Client suivant"})[
     ["Dossier déchargé", "Déchargé à", "Déchargé le", "Dossier suivant", "Rechargé à", "Rechargé le",
-     "Écart (h)", "Km à vide", "Lavage", "Prix suivant (€)", "Km chargés suivant", "Renta (€/km)",
+     "Écart", "Km à vide", "Lavage", "Prix suivant (€)", "Km chargés suivant", "Renta (€/km)",
      "Remorque", "Tracteur", "Chauffeur", "Client suivant"]].sort_values("Déchargé le")
 
 with st.expander(f"Tous les rechargements ({len(tab)}) et enchaînements ({len(detail)})"):
-    st.dataframe(tab, hide_index=True, width="stretch",
+    st.dataframe(tab.style.format({"Rechargé en (médiane)": fmt_h}, na_rep="—"), hide_index=True, width="stretch",
                  column_config={"Renta (€/km)": st.column_config.NumberColumn(format="%.2f"),
                                 "Part avec lavage": st.column_config.NumberColumn(format="percent"),
                                 "Km à vide moyen": st.column_config.NumberColumn(format="%.0f"),
                                 "Prix moyen (€)": st.column_config.NumberColumn(format="%.0f"),
                                 "Km chargés moyen": st.column_config.NumberColumn(format="%.0f")})
-    st.dataframe(detail, hide_index=True, width="stretch")
+    st.dataframe(detail.style.format({"Écart": fmt_h}, na_rep="—"), hide_index=True, width="stretch")
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         pd.DataFrame({"Paramètre": ["Déchargement", "Rayon (km)", "Fenêtre (jours)", "+2 j week-end", "Source",
@@ -348,8 +349,12 @@ with st.expander(f"Tous les rechargements ({len(tab)}) et enchaînements ({len(d
                                  "vol d'oiseau × 1,3 (lavages compris)",
                                  "prix suivant ÷ (km vide + km chargés), rapport des sommes"]}
                      ).to_excel(xw, sheet_name="Paramètres", index=False)
-        tab.to_excel(xw, sheet_name="Rechargements", index=False)
-        detail.to_excel(xw, sheet_name="Enchaînements", index=False)
+        # Durées Excel (format [h] h mm) : triables et calculables, affichées « 7 h 40 »
+        for nom, df_x, col in (("Rechargements", tab, "Rechargé en (médiane)"), ("Enchaînements", detail, "Écart")):
+            x = df_x.copy()
+            x[col] = vers_jours(x[col])
+            x.to_excel(xw, sheet_name=nom, index=False)
+            excel_heures(xw.sheets[nom], x, [col])
     st.download_button("Exporter Excel", data=buf.getvalue(),
                        file_name=f"rechargements_{E.norm_txt(lieu['A_ville']).replace(' ', '_')}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

@@ -1111,7 +1111,7 @@ def construire_tableau_de_bord(df_flotte, df_dos, df_traj, df_ctrl, stops, meta:
     for r in stops.sort_values(["tracteur", "ordre"]).to_dict("records"):
         site = None
         if pd.notna(r["ts_arr"]) and pd.notna(r["ts_dep"]):
-            site = round((r["ts_dep"] - r["ts_arr"]).total_seconds() / 3600, 1)
+            site = round((r["ts_dep"] - r["ts_arr"]).total_seconds() / 3600, 3)
         arrets.setdefault(r["tracteur"], []).append(dict(
             o=_js(r["ordre"]), d=r["dossier"], act=r["activite"], nom=r["nom"], v=r["ville"], p=r["pays"],
             cp=r["cp"], prevu=_js(r["ts_plan"]), arr=_js(r["ts_arr"]), dep=_js(r["ts_dep"]), site=site,
@@ -1444,7 +1444,7 @@ function drawTimeline(t){
  let h='';
  const pre=byO[0]; if(pre) h+=`<div class="stop prev"><div class="act CH">CH*</div><div class="pl"><b>${esc(pre.dn||pre.dv)}</b><div>${esc(pre.dv)} (${esc(pre.dp)}) · chargement avant la période</div></div><div class="tm"></div></div>`+legHTML(pre);
  A.forEach((a,i)=>{
-  const site = a.site!=null?`<div>${nf1.format(a.site)} h sur site</div>`:'';
+  const site = a.site!=null?`<div>${(m=>Math.floor(m/60)?Math.floor(m/60)+' h '+String(m%60).padStart(2,'0'):m+' min')(Math.round(a.site*60))} sur site</div>`:'';
   const warn = a.site!=null&&a.site>D.seuils.site?' style="color:var(--orange)"':'';
   h+=`<div class="stop ${a.real?'':'prev'}"><div class="act ${a.act}">${a.act}</div>
    <div class="pl"><b>${esc(a.nom)}</b><div>${esc(a.v)} (${esc(a.p)}-${esc(a.cp)}) · ${esc(a.d)}${a.real?'':' · prévu'}</div></div>

@@ -178,8 +178,16 @@ def suggestions(hist: pd.DataFrame, point, rayon_km: float = RAYON_KM, n: int = 
     return out[:n]
 
 
+def _fmt_h(h) -> str:
+    """Heures décimales → « 7 h 40 » (même règle que core/duree.fmt_h)."""
+    if h is None or h != h:
+        return "—"
+    m = int(round(float(h) * 60))
+    return f"{m // 60} h {m % 60:02d}" if m >= 60 else f"{m} min"
+
+
 def texte_suggestion(s: dict) -> str:
-    bits = [f'{s["frequence"]}×', f'~{s["km_vide"]:.0f} km à vide', f'rechargé en {s["ecart_h"]:.0f} h']
+    bits = [f'{s["frequence"]}×', f'~{s["km_vide"]:.0f} km à vide', f'rechargé en {_fmt_h(s["ecart_h"])}']
     if s.get("renta") is not None:
         bits.insert(0, f'{s["renta"]:.2f} €/km'.replace(".", ","))
     return f'{s["lieu"]} · ' + " · ".join(bits)

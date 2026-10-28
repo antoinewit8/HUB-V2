@@ -369,7 +369,7 @@ def chainer(d: pd.DataFrame, ecart_max_jours: float = ECART_MAX_JOURS) -> pd.Dat
             d.at[a, "B"] = d.at[b, "C1"]
             d.at[a, "ville_B"] = d.at[b, "ville_C1"]
             d.at[a, "dossier_suivant"] = d.at[b, "dossier"]
-            d.at[a, "ecart_h"] = round(ecart, 1)
+            d.at[a, "ecart_h"] = round(ecart, 2)
     return d
 
 

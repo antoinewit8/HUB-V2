@@ -293,7 +293,7 @@ def vue(t: pd.DataFrame, autres: dict, activites: pd.DataFrame, dim: str, t0, t1
             "Ressource": r, "Dossiers": n_dans, "Jours actifs": len(actifs),
             "Jours ouvrés sans activité": len(sans),
             "Dates sans activité": ", ".join(x.strftime("%d/%m") for x in sans[:8]) + (" …" if len(sans) > 8 else ""),
-            "Plus long écart (h)": round(ecarts.get(r, np.nan), 0) if ecarts.get(r) == ecarts.get(r) else np.nan,
+            "Plus long écart (h)": round(ecarts.get(r, np.nan), 2) if ecarts.get(r) == ecarts.get(r) else np.nan,
             "Km chargés estimés": round(km_ch), "Km à vide estimés": round(km_vide),
             "Part à vide": km_vide / (km_ch + km_vide) if (km_ch + km_vide) > 0 else np.nan,
             "Repositionnements": n_vide,

@@ -279,6 +279,37 @@
         #co2-line b { font-size: 16px; font-weight: 600; color: #1a7f37; }
         #co2-line small { color: var(--sub); font-size: 11.5px; text-align: right; }
         .bx-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+        /* ETA client (temps de conduite UE) */
+        #eta-opts { display: none; padding: 2px 0 10px; }
+        #eta-opts.show { display: grid; gap: 8px; }
+        #eta-opts .eo { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--sub); }
+        #eta-opts input[type="datetime-local"], #eta-opts input[type="number"] { font: inherit; font-size: 13px; color: var(--text);
+            border: .5px solid var(--hair); border-radius: 8px; padding: 5px 7px; background: #fff; font-variant-numeric: tabular-nums; }
+        #eta-opts input[type="number"] { width: 64px; text-align: right; }
+        #eta-opts .eo-now { border: none; background: var(--soft); color: var(--blue); border-radius: 980px; padding: 4px 10px;
+            font: 500 12px var(--font); cursor: pointer; }
+        #eta-opts .eo-team { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
+        #eta-box { display: none; margin-top: 8px; padding: 12px 14px; background: #fff; border-radius: 14px; box-shadow: var(--tile);
+            font-size: 13px; font-variant-numeric: tabular-nums; }
+        #eta-box.show { display: block; }
+        #eta-box .eta-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        #eta-box .eta-copy { border: none; background: var(--soft); color: var(--blue); border-radius: 980px; padding: 4px 10px;
+            font: 500 12px var(--font); cursor: pointer; }
+        .eta-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+        .eta-row + .eta-row { border-top: .5px solid var(--hair); }
+        .eta-k { flex: none; width: 58px; color: var(--sub); font-size: 12px; }
+        .eta-t { flex: none; font-weight: 600; }
+        .eta-t.arr { color: var(--blue); }
+        .eta-l { flex: 1; min-width: 0; color: var(--sub); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .eta-sum { margin-top: 8px; padding-top: 8px; border-top: .5px solid var(--hair); color: var(--sub); font-size: 12px; line-height: 1.5; }
+        .eta-sum b { color: var(--text); font-weight: 600; }
+        .eta-p { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 3px 0; cursor: pointer; }
+        .eta-p:hover { color: var(--blue); }
+        .eta-tag { flex: none; padding: 1px 6px; border-radius: 6px; font-size: 10.5px; font-weight: 700; color: #fff; background: #6b7c93; }
+        .eta-tag.rest { background: #4b3f8f; }
+        .eta-pin { width: 20px; height: 20px; border-radius: 6px; border: 2px solid #fff; color: #fff; background: #6b7c93;
+            font: 700 11px/16px var(--font); text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; }
+        .eta-pin.rest { background: #4b3f8f; }
         .alt-row, .al-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; margin: 0 -8px;
             border: none; border-radius: 10px; background: none; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
         .alt-row:hover, .al-row:hover, .alt-row.hl { background: var(--soft); }
@@ -617,6 +648,23 @@
                 <label class="row" title="Émissions CO2e du trajet (ISO 14083) pour un camion Euro 6">CO₂ (Euro 6)
                     <span class="sw"><input type="checkbox" id="opt-co2" onchange="onOptionChange()"><span></span></span>
                 </label>
+                <label class="row" title="Heures d'arrivée avec les pauses (45 min toutes les 4 h 30) et repos journaliers (11 h) du règlement UE 561/2006">ETA client (temps de conduite)
+                    <span class="sw"><input type="checkbox" id="opt-eta" onchange="onEtaToggle()"><span></span></span>
+                </label>
+                <div id="eta-opts">
+                    <div class="eo"><span>Départ</span>
+                        <span style="display:flex;gap:6px;align-items:center">
+                            <input type="datetime-local" id="eta-depart" step="300" onchange="onEtaChange()">
+                            <button type="button" class="eo-now" onclick="etaMaintenant()" title="Partir maintenant">Maintenant</button>
+                        </span>
+                    </div>
+                    <div class="eo"><span title="Chargement / déchargement à chaque étape intermédiaire (pas au départ ni à l'arrivée)">Arrêt à chaque étape (min)</span>
+                        <input type="number" id="eta-service" min="0" max="600" step="5" value="0" onchange="onEtaChange()">
+                    </div>
+                    <div class="eo"><span>Équipage</span>
+                        <label class="eo-team"><input type="checkbox" id="eta-team" onchange="onEtaChange()"> Double équipage</label>
+                    </div>
+                </div>
                 <label class="row" id="row-pompes" title="Ma liste de pompes Total (page Pompes carburant) sur la carte, et celles le long du trajet">Pompes Total (ma liste)
                     <span class="sw"><input type="checkbox" id="opt-pompes" onchange="onPompesToggle()"><span></span></span>
                 </label>
@@ -635,7 +683,7 @@
                     </div>
                     <div class="stat">
                         <div class="n" id="dur">—</div>
-                        <div class="l">Durée</div>
+                        <div class="l" id="dur-l">Durée</div>
                     </div>
                     <div class="stat clickable" onclick="toggleTollDetail()" title="Détail par pays">
                         <div class="n" id="toll">—</div>
@@ -645,6 +693,7 @@
                 <div id="km-detail"></div>
                 <div id="toll-detail"></div>
                 <div id="co2-line"></div>
+                <div id="eta-box"></div>
 
                 <div id="alt-box"></div>
 
@@ -1079,6 +1128,7 @@
             _resetFerries();
             _clearAlternatives();
             _clearAlerts();
+            _clearEta();
             _cancelSearchPin();
             closeSuggest();
             document.getElementById('search-input').value = '';
@@ -1131,7 +1181,7 @@
 
         // Résumé des options actives sur la ligne du dossier replié
         const OPT_LABELS = [['opt-tolls', 'Sans péage'], ['opt-hw', 'Sans autoroute'], ['opt-traffic', 'Trafic'],
-                            ['opt-alt', 'Variantes'], ['opt-co2', 'CO₂'], ['opt-pompes', 'Pompes Total']];
+                            ['opt-alt', 'Variantes'], ['opt-co2', 'CO₂'], ['opt-eta', 'ETA'], ['opt-pompes', 'Pompes Total']];
         function updateOptsSummary() {
             const on = OPT_LABELS.filter(([id]) => document.getElementById(id).checked).map(([, l]) => l);
             const el = document.getElementById('opts-sum');
@@ -1581,7 +1631,8 @@
                 traffic:        document.getElementById('opt-traffic').checked,
                 alternatives:   document.getElementById('opt-alt').checked,
                 co2:            document.getElementById('opt-co2').checked,
-                ferries:        forcedFerries.slice()
+                ferries:        forcedFerries.slice(),
+                ...etaOptions()
             };
         }
 
@@ -1676,7 +1727,8 @@
         function _routeKey(pts) {
             const o = options();
             return JSON.stringify([pts.map(p => [+p.lat.toFixed(6), +p.lng.toFixed(6)]),
-                o.avoid_tolls, o.avoid_highways, o.traffic, o.alternatives, o.co2, o.ferries]);
+                o.avoid_tolls, o.avoid_highways, o.traffic, o.alternatives, o.co2, o.ferries,
+                o.eta ? [o.start_time, o.team, o.service_min] : 0]);
         }
         function _cacheRoute(key, data) {
             if (!data._t) data._t = Date.now();
@@ -1925,7 +1977,13 @@
         function setStats(d) {
             lastRouteData = d;
             document.getElementById('dist').textContent = (d.distance_km ?? '—') + ' km';
-            document.getElementById('dur').textContent  = (d.duration_h  ?? '—') + ' h';
+            const e = d.eta;
+            // Avec l'ETA, PTV compte pauses et repos dans la durée : on affiche la conduite seule ici,
+            // le total est dans le bloc ETA.
+            document.getElementById('dur').textContent = e ? fmtSec(e.driving_s)
+                : d.duration_s != null ? fmtSec(d.duration_s)
+                : d.duration_h != null ? _fmtH(d.duration_h) : '—';
+            document.getElementById('dur-l').textContent = e ? 'Conduite' : 'Durée';
             document.getElementById('toll').textContent = (d.prix_peage  ?? '—') + ' €';
             renderTollDetail();
             renderKmDetail();
@@ -1933,6 +1991,7 @@
             renderAlternatives(d);
             renderAlerts(d);
             renderCO2(d);
+            renderETA(d);
         }
 
         // CO2e (ISO 14083, Euro 6) — seulement si l'option est cochée
@@ -1951,6 +2010,229 @@
                 el.innerHTML = '<small style="text-align:left">CO₂ indisponible pour ce calcul.</small>';
             }
             el.className = 'show';
+        }
+
+
+        // ═══════════════════════════════════════════════════════
+        //  ETA CLIENT — temps de conduite UE (règlement 561/2006)
+        // ═══════════════════════════════════════════════════════
+        // Le serveur calcule en POST avec driver[workingHoursPreset] : PTV place
+        // les pauses (45 min après 4 h 30 de conduite) et les repos journaliers
+        // (11 h après 9 h de conduite), et renvoie l'heure d'arrivée à chaque arrêt.
+        const LS_ETA = 'cm_eta';
+        let etaMarkers = [];
+
+        // Durées toujours en heures et minutes : 7.66 h → « 7 h 40 »
+        function fmtSec(s) {
+            const m = Math.round((Number(s) || 0) / 60);
+            const h = Math.floor(m / 60), r = m % 60;
+            return h ? `${h} h ${String(r).padStart(2, '0')}` : `${r} min`;
+        }
+        // Heure renvoyée par PTV (RFC 3339, heure locale du lieu) → « mer. 28/10 · 17:10 »
+        const JOURS = ['dim.', 'lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.'];
+        const JOURS_LONGS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+        function _partsT(iso) {
+            const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso || '');
+            if (!m) return null;
+            const [, y, mo, d, h, mi] = m;
+            const wd = new Date(Date.UTC(+y, +mo - 1, +d)).getUTCDay();
+            return { y, mo, d, h, mi, wd };
+        }
+        function fmtT(iso) {
+            const p = _partsT(iso);
+            return p ? `${JOURS[p.wd]} ${p.d}/${p.mo} · ${p.h}:${p.mi}` : '—';
+        }
+        function fmtHeure(iso) { const p = _partsT(iso); return p ? `${p.h}:${p.mi}` : '—'; }
+        function fmtJourLong(iso) {
+            const p = _partsT(iso);
+            return p ? `${JOURS_LONGS[p.wd]} ${p.d}/${p.mo}/${p.y}` : '';
+        }
+
+        function _maintenant() {
+            const d = new Date(Math.ceil(Date.now() / 300000) * 300000);   // arrondi aux 5 min suivantes
+            const z = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;
+        }
+        function etaOptions() {
+            if (!document.getElementById('opt-eta').checked) return { eta: false };
+            const dep = document.getElementById('eta-depart');
+            if (!dep.value) dep.value = _maintenant();
+            return {
+                eta:         true,
+                start_time:  dep.value,
+                team:        document.getElementById('eta-team').checked,
+                service_min: Math.max(0, Math.round(Number(document.getElementById('eta-service').value) || 0))
+            };
+        }
+        function _etaSauver() {
+            try {
+                localStorage.setItem(LS_ETA, JSON.stringify({
+                    on:      document.getElementById('opt-eta').checked,
+                    team:    document.getElementById('eta-team').checked,
+                    service: document.getElementById('eta-service').value
+                }));
+            } catch (e) {}
+        }
+        function onEtaToggle() {
+            const on = document.getElementById('opt-eta').checked;
+            document.getElementById('eta-opts').classList.toggle('show', on);
+            if (on && !document.getElementById('eta-depart').value) etaMaintenant(true);
+            _etaSauver();
+            onOptionChange();
+        }
+        function onEtaChange() { _etaSauver(); onOptionChange(); }
+        function etaMaintenant(silencieux) {
+            document.getElementById('eta-depart').value = _maintenant();
+            if (!silencieux) onEtaChange();
+        }
+        (function initEta() {
+            try {
+                const o = JSON.parse(localStorage.getItem(LS_ETA) || 'null');
+                if (o) {
+                    document.getElementById('opt-eta').checked = !!o.on;
+                    document.getElementById('eta-team').checked = !!o.team;
+                    if (o.service != null) document.getElementById('eta-service').value = o.service;
+                }
+            } catch (e) {}
+            // L'heure de départ n'est pas gardée : à l'ouverture, départ = maintenant.
+            if (document.getElementById('opt-eta').checked) {
+                document.getElementById('eta-opts').classList.add('show');
+                etaMaintenant(true);
+            }
+            updateOptsSummary();
+        })();
+
+        function _clearEta() {
+            etaMarkers.forEach(m => m.remove());
+            etaMarkers = [];
+            const box = document.getElementById('eta-box');
+            box.innerHTML = ''; box.className = '';
+        }
+
+        // Libellé d'un arrêt renvoyé par le serveur : D = départ, E1… = étapes exactes, A = arrivée
+        function _etaLabel(name) {
+            if (name === 'D') return { k: 'Départ', l: origin && origin.label };
+            if (name === 'A') return { k: 'Arrivée', l: dest && dest.label };
+            const n = parseInt(String(name).slice(1), 10);
+            const wp = waypoints[n - 1];
+            return { k: `Étape ${n}`, l: wp && wp.label };
+        }
+
+        function renderETA(d) {
+            _clearEta();
+            if (!document.getElementById('opt-eta').checked || !d) return;
+            const box = document.getElementById('eta-box');
+            const e = d.eta;
+            if (!e) {
+                box.innerHTML = '<div class="bx-title">ETA client</div><div class="bx-hint">'
+                    + (d.eta_err ? `PTV n'a pas calculé les temps de conduite : ${esc(d.eta_err)}`
+                                 : 'Le serveur carte ne renvoie pas encore les ETA : il doit être mis à jour (Cartes-bot-).')
+                    + '</div>';
+                box.className = 'show';
+                return;
+            }
+
+            const stops = (e.stops || []).filter(s => s.at);
+            const rows = stops.map(s => {
+                const L = _etaLabel(s.name);
+                const cls = s.name === 'A' ? ' arr' : '';
+                return `<div class="eta-row"><span class="eta-k">${L.k}</span>`
+                    + `<span class="eta-t${cls}">${fmtT(s.at)}</span>`
+                    + `<span class="eta-l" title="${esc(L.l || '')}">${esc(L.l || '')}</span></div>`;
+            }).join('');
+
+            const pauses = e.pauses || [];
+            const nB = pauses.filter(p => p.type === 'BREAK').length;
+            const nR = pauses.filter(p => p.type === 'DAILY_REST').length;
+            const lignes = [`Conduite <b>${fmtSec(e.driving_s)}</b>`];
+            if (e.break_s) lignes.push(`pauses <b>${fmtSec(e.break_s)}</b>${nB > 1 ? ` (${nB})` : ''}`);
+            if (e.rest_s) lignes.push(`repos journalier <b>${fmtSec(e.rest_s)}</b>${nR > 1 ? ` (${nR})` : ''}`);
+            if (e.service_s) lignes.push(`arrêts <b>${fmtSec(e.service_s)}</b>`);
+            if (e.waiting_s) lignes.push(`attente <b>${fmtSec(e.waiting_s)}</b>`);
+            const total = e.travel_s || d.duration_s;
+            const team = document.getElementById('eta-team').checked;
+
+            const plist = pauses.map((p, i) => {
+                const rest = p.type === 'DAILY_REST';
+                const fin = p.at && p.duration_s ? _plusSec(p.at, p.duration_s) : null;
+                return `<div class="eta-p" data-i="${i}"><span class="eta-tag${rest ? ' rest' : ''}">${rest ? 'Repos' : 'Pause'}</span>`
+                    + `<span>${p.at ? fmtT(p.at) : ''}${fin ? ' → ' + (fin.slice(0, 10) === p.at.slice(0, 10) ? fmtHeure(fin) : fmtT(fin)) : ''} · ${fmtSec(p.duration_s)}`
+                    + `${p.km != null ? ` · km ${Math.round(p.km)}` : ''}${p.pendant_arret ? ' · pendant l\'arrêt' : ''}</span></div>`;
+            }).join('');
+
+            box.innerHTML = `<div class="eta-head"><span class="bx-title" style="margin:0">ETA client${team ? ' · double équipage' : ''}</span>`
+                + `<button class="eta-copy" onclick="copierETA(this)" title="Texte prêt à envoyer au client">Copier</button></div>`
+                + rows
+                + `<div class="eta-sum">${lignes.join(' · ')}<br>Total porte à porte <b>${fmtSec(total)}</b>`
+                + (document.getElementById('opt-traffic').checked ? ' · trafic prévu inclus' : ' · sans trafic')
+                + '</div>'
+                + (plist ? `<div class="eta-sum" style="padding-top:6px">${plist}</div>` : '')
+                + '<div class="bx-hint">Heures locales. Règlement UE 561/2006 : 45 min de pause toutes les 4 h 30 de conduite, '
+                + '11 h de repos après 9 h de conduite. Conducteur reposé au départ.</div>';
+            box.className = 'show';
+
+            box.querySelectorAll('.eta-p').forEach(el => el.addEventListener('click', () => {
+                const p = pauses[+el.dataset.i];
+                if (p && p.lat != null) map.flyTo({ center: [p.lng, p.lat], zoom: Math.max(map.getZoom(), 11), duration: 700 });
+            }));
+
+            pauses.forEach(p => {
+                if (p.lat == null || p.lng == null) return;
+                const rest = p.type === 'DAILY_REST';
+                const el = document.createElement('div');
+                el.className = 'eta-pin' + (rest ? ' rest' : '');
+                el.textContent = rest ? 'R' : 'P';
+                const html = `<div class="popup-label">${rest ? 'Repos journalier' : 'Pause'} · ${fmtSec(p.duration_s)}</div>`
+                    + `<div style="font-size:12.5px;color:var(--sub)">${p.at ? fmtT(p.at) : ''}${p.km != null ? ` · à ${Math.round(p.km)} km du départ` : ''}</div>`;
+                etaMarkers.push(new maplibregl.Marker({ element: el, anchor: 'center' })
+                    .setLngLat([p.lng, p.lat])
+                    .setPopup(new maplibregl.Popup({ offset: 14, closeButton: false }).setHTML(html))
+                    .addTo(map));
+            });
+        }
+
+        // Ajoute des secondes à une heure RFC 3339 en gardant son décalage (heure locale du lieu)
+        function _plusSec(iso, sec) {
+            const p = _partsT(iso);
+            if (!p) return null;
+            const d = new Date(Date.UTC(+p.y, +p.mo - 1, +p.d, +p.h, +p.mi) + sec * 1000);
+            const z = n => String(n).padStart(2, '0');
+            return `${d.getUTCFullYear()}-${z(d.getUTCMonth() + 1)}-${z(d.getUTCDate())}T${z(d.getUTCHours())}:${z(d.getUTCMinutes())}`;
+        }
+
+        function texteETA(d) {
+            const e = d && d.eta;
+            if (!e) return '';
+            const stops = (e.stops || []).filter(s => s.at);
+            const out = [];
+            stops.forEach(s => {
+                const L = _etaLabel(s.name);
+                const lieu = L.l ? ` — ${L.l}` : '';
+                if (s.name === 'D') out.push(`Départ : ${fmtJourLong(s.at)} à ${fmtHeure(s.at)}${lieu}`);
+                else if (s.name === 'A') out.push(`Arrivée estimée : ${fmtJourLong(s.at)} vers ${fmtHeure(s.at)}${lieu}`);
+                else out.push(`${L.k} : ${fmtJourLong(s.at)} vers ${fmtHeure(s.at)}${lieu}`);
+            });
+            const det = [];
+            if (e.break_s) det.push(`pauses ${fmtSec(e.break_s)}`);
+            if (e.rest_s) det.push(`repos journalier ${fmtSec(e.rest_s)}`);
+            out.push(`Distance ${Math.round(d.distance_km).toLocaleString('fr-BE')} km · conduite ${fmtSec(e.driving_s)}`
+                + (det.length ? `, ${det.join(' et ')} (temps de conduite réglementaires)` : '') + '.');
+            out.push('Heures locales, sous réserve des conditions de circulation.');
+            return out.join('\n');
+        }
+        async function copierETA(btn) {
+            const t = texteETA(lastRouteData);
+            if (!t) return;
+            try { await navigator.clipboard.writeText(t); }
+            catch (err) {
+                const ta = document.createElement('textarea');
+                ta.value = t; document.body.appendChild(ta); ta.select();
+                try { document.execCommand('copy'); } catch (e2) {}
+                ta.remove();
+            }
+            const old = btn.textContent;
+            btn.textContent = 'Copié';
+            setTimeout(() => { btn.textContent = old; }, 1400);
         }
 
         // ═══════════════════════════════════════════════════════

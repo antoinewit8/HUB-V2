@@ -12,6 +12,7 @@ import streamlit as st
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from core import ui
+from core.duree import fmt_h
 
 ui.page("calcul_km", "Déposez un fichier Excel : les distances poids lourds sont calculées via PTV, ligne par ligne.")
 
@@ -156,8 +157,10 @@ def _tableau(resultats):
         df = df.drop(columns=["Péage (€)"])
     if len(df["Feuille"].unique()) == 1:
         df = df.drop(columns=["Feuille"])
+    # Durée gardée en heures (tri juste), affichée en heures et minutes
+    df = df.rename(columns={"Durée (h)": "Durée"})
     st.dataframe(
-        df, width="stretch", hide_index=True,
+        df.style.format({"Durée": fmt_h}, na_rep="—") if "Durée" in df.columns else df, width="stretch", hide_index=True,
         column_config={
             "Carte": st.column_config.LinkColumn("Carte", display_text="Voir"),
             "KM": st.column_config.NumberColumn("KM", format="%.1f"),

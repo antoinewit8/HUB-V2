@@ -27,6 +27,7 @@ from openpyxl.utils import get_column_letter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import ui  # noqa: E402
+from core.duree import excel_heures, fmt_h, vers_jours  # noqa: E402
 from tools.renta_dept import carte as K  # noqa: E402
 from tools.renta_dept import engine as E  # noqa: E402
 from tools.renta_dept.plateau import moteur  # noqa: E402
@@ -68,7 +69,7 @@ COLS_ZONES = {
     "renta_chargee": "Renta chargée", "renta_conv": "Renta (convention)", "renta_sortie": "Renta livraison + sortie",
     "sorties": "Repositionnements sortants", "vide_sortie_moy": "Vide de sortie moyen (km)",
     "km_sortie_med": "Vide de sortie médian (km)", "pct_local": "% rechargement local",
-    "pct_meme_zone": "% rechargé dans le dépt", "delai_h": "Délai avant rechargement (h)",
+    "pct_meme_zone": "% rechargé dans le dépt", "delai_h": "Délai avant rechargement",
     "chargements": "Chargements", "entrees": "Repositionnements entrants",
     "vide_entree_moy": "Vide d'entrée moyen (km)",
     "livraisons_aff": "Livraisons affrétés", "ca_aff": "CA affrétés (€)", "representatif": "Représentatif",
@@ -76,7 +77,7 @@ COLS_ZONES = {
 COLS_REP = {
     "tracteur": "Tracteur", "statut": "Statut", "dossier_prec": "Dossier livré", "de_ville": "Départ à vide",
     "zone_de_l": "Zone de départ", "dossier_suiv": "Dossier suivant", "a_ville": "Rechargement",
-    "zone_a_l": "Zone de rechargement", "km": "KM à vide", "nb_trajets": "Trajets", "delai_h": "Délai (h)",
+    "zone_a_l": "Zone de rechargement", "km": "KM à vide", "nb_trajets": "Trajets", "delai_h": "Délai",
     "de_ts": "Départ", "a_ts": "Arrivée", "affrete": "Affrété",
 }
 COLS_CTRL = {"type": "Contrôle", "zone": "Zone", "tracteur": "Tracteur", "dossier": "N° dossier", "detail": "Détail"}
@@ -85,8 +86,11 @@ FMT = {
     "livraisons": "%.1f", "pct_groupage": "%.0f %%", "ca": "%.0f €", "pct_ca": "%.1f %%", "km_charge": "%.0f",
     "km_ch_moy": "%.0f", "renta_chargee": "%.2f", "renta_conv": "%.2f", "renta_sortie": "%.2f",
     "vide_sortie_moy": "%.0f", "km_sortie_med": "%.0f", "pct_local": "%.0f %%", "pct_meme_zone": "%.0f %%",
-    "delai_h": "%.1f", "vide_entree_moy": "%.0f", "livraisons_aff": "%.1f", "ca_aff": "%.0f €",
+    "vide_entree_moy": "%.0f", "livraisons_aff": "%.1f", "ca_aff": "%.0f €",
 }
+
+
+HEURES = ["delai_h"]         # colonnes en heures : affichées en heures et minutes
 
 
 def _col_config(cols):
@@ -95,6 +99,8 @@ def _col_config(cols):
         lab = COLS_ZONES.get(c, COLS_REP.get(c, c))
         if c in FMT:
             cfg[c] = st.column_config.NumberColumn(lab, format=FMT[c])
+        elif c in HEURES:
+            cfg[c] = st.column_config.Column(lab)       # affiché « 7 h 40 » par le Styler, tri numérique gardé
         elif c in ("de_ts", "a_ts"):
             cfg[c] = st.column_config.DatetimeColumn(lab, format="DD/MM/YY HH:mm")
         elif c in ("representatif", "affrete"):
@@ -125,7 +131,7 @@ def styler(df, tot):
         "vide_entree_moy": (tot.get("vide_sortie_moy"), False),
         "pct_local": (tot.get("pct_local"), True),
     }
-    s = df.style
+    s = df.style.format({c: fmt_h for c in HEURES if c in df.columns}, na_rep="—")
     for c, (ref, mieux) in refs.items():
         if c in df.columns:
             s = s.map(lambda v, r=ref, m=mieux: _teinte(v, r, m), subset=[c])
@@ -178,12 +184,16 @@ def export_excel(zones, rep, ctrl, meta):
                 continue
             c = [k for k in cols if k in df.columns]
             x = df[c].rename(columns=cols).copy()
+            durees = [cols[k] for k in HEURES if k in c]
+            for col in durees:
+                x[col] = vers_jours(x[col])
             for col in x.columns:
                 if pd.api.types.is_datetime64_any_dtype(x[col]):
                     x[col] = x[col].dt.strftime("%d/%m/%Y %H:%M").fillna("")
                 if x[col].dtype == bool:
                     x[col] = x[col].map({True: "Oui", False: "Non"})
             x.to_excel(w, sheet_name=nom, index=False)
+            excel_heures(w.sheets[nom], x, durees)
             _style(w.sheets[nom], len(x))
     return out.getvalue()
 
@@ -404,7 +414,8 @@ with tabs[1]:
             r = r[~r["affrete"]]
         r = r.sort_values("km", ascending=False)
         cols = [c for c in COLS_REP if c in r.columns]
-        st.dataframe(r[cols], hide_index=True, width="stretch", height=520, column_config=_col_config(cols))
+        st.dataframe(r[cols].style.format({c: fmt_h for c in HEURES if c in cols}, na_rep="—"), hide_index=True,
+                     width="stretch", height=520, column_config=_col_config(cols))
         st.caption(f"{len(r)} repositionnements · {r['km'].sum():,.0f} km à vide".replace(",", " "))
 
 with tabs[2]:

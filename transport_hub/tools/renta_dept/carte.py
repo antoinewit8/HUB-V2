@@ -37,7 +37,7 @@ def donnees(zones: pd.DataFrame) -> dict:
             liv=_f(r["livraisons"], 1), ca=_f(r["ca"], 0), kmc=_f(r["km_charge"], 0),
             rc=_f(r["renta_chargee"]), rv=_f(r["renta_conv"]), rs=_f(r["renta_sortie"]),
             vs=_f(r["vide_sortie_moy"], 0), ve=_f(r["vide_entree_moy"], 0), loc=_f(r["pct_local"], 1),
-            dl=_f(r["delai_h"], 1), so=int(r["sorties"] or 0), en=int(r["entrees"] or 0),
+            dl=_f(r["delai_h"], 2), so=int(r["sorties"] or 0), en=int(r["entrees"] or 0),
             ch=int(r["chargements"] or 0), grp=_f(r["pct_groupage"], 0), aff=_f(r["livraisons_aff"], 1),
             rep=bool(r["representatif"]))
     return out
@@ -147,6 +147,8 @@ const fmtE = v => v == null ? "—" : v.toFixed(2).replace(".", ",") + " €/km"
 const fmtK = v => v == null ? "—" : Math.round(v).toLocaleString("fr-FR") + " km";
 const fmtP = v => v == null ? "—" : Math.round(v) + " %";
 const fmtN = v => v == null ? "—" : (Math.round(v * 10) / 10).toLocaleString("fr-FR");
+const fmtH = v => { if (v == null) return "—"; const m = Math.round(v * 60), h = Math.floor(m / 60), r = m % 60;
+  return h ? h + " h " + String(r).padStart(2, "0") : r + " min"; };
 const fmtC = v => v == null ? "—" : Math.round(v).toLocaleString("fr-FR") + " €";
 const M = [
   {k:"rc", l:"Renta chargée", f:fmtE, s:+1, span:.25, d:"CA ÷ km chargés"},
@@ -254,7 +256,7 @@ function montrer(code, ev){
     h += ligne("Livraison + sortie", fmtE(x.rs));
     h += ligne("Vide de sortie", fmtK(x.vs) + " (" + x.so + ")");
     h += ligne("Rechargement local", fmtP(x.loc));
-    if (x.dl != null) h += ligne("Délai avant rechargement", fmtN(x.dl) + " h");
+    if (x.dl != null) h += ligne("Délai avant rechargement", fmtH(x.dl));
     h += ligne("Chargements ici", x.ch + (x.en ? " · vide d'entrée " + fmtK(x.ve) : ""));
     if (x.aff) h += ligne("Livraisons affrétés", fmtN(x.aff));
     if (!x.rep && x.liv > 0) h += '<div class="nr">Moins de ' + C.minliv + " livraisons : chiffres indicatifs</div>";

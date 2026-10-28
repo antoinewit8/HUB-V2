@@ -16,6 +16,7 @@ import json
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from core import ptv, ui  # noqa: E402
+from core.duree import fmt_h  # noqa: E402
 
 ui.page_config("Aide planning")
 
@@ -967,7 +968,7 @@ def _onglet_planning():
                     st.markdown(
                         f'<div class="ap-suite"><p class="eye">Ensuite</p>'
                         f'<div class="l">Dossier {_esc(suite["suivant"])} · chargement à {_esc(suite["lieu_suivant"])}</div>'
-                        f'<div class="s">{PL._heure(suite["jusqua"])} · après {ecart:.0f} h libre'
+                        f'<div class="s">{PL._heure(suite["jusqua"])} · après {fmt_h(ecart)} libre'
                         + (f' et ~{kv:.0f} km à vide' if kv == kv else "") + ' depuis ' + _esc(suite["lieu"]) + '</div></div>',
                         unsafe_allow_html=True)
                     if st.button("Voir ce dossier", key="ap_voir_suite", width="stretch"):
@@ -1027,7 +1028,7 @@ with t_place:
                               f'<div class="s">{_esc(c["chauffeur"])}</div></div>'
                               f'<div><div class="l">Libre {PL._heure(c["libre"])} · {_esc(c["lieu"])}</div>{trou}</div>'
                               f'<div class="k"><b>~{c["km_vide"]:.0f} km</b> à vide<br><span>'
-                              + (f'marge {c["marge_h"]:.0f} h' if c["marge_h"] >= 0.5 else "juste à l’heure")
+                              + (f'marge {fmt_h(c["marge_h"])}' if c["marge_h"] >= 0.5 else "juste à l’heure")
                               + '</span></div></div>')
                 if p["nb_candidats"] > len(p["candidats"]):
                     corps += f'<div class="ap-cand plus">+ {p["nb_candidats"] - len(p["candidats"])} autre(s) possible(s)</div>'
@@ -1086,14 +1087,15 @@ with t_res:
         st.caption("Jours ouvrés du lundi au vendredi. Km estimés au vol d’oiseau × 1,3 : chargés = 1er chargement → "
                    "dernier déchargement ; à vide = dernier déchargement → lavage / décrochage → chargement suivant.")
         st.dataframe(
-            synthese.rename(columns={"Ressource": dimension}).assign(**{"Part à vide": synthese["Part à vide"] * 100}),
+            synthese.rename(columns={"Ressource": dimension}).assign(**{"Part à vide": synthese["Part à vide"] * 100})
+            .style.format({"Plus long écart (h)": fmt_h}, na_rep="—"),
             hide_index=True, width="stretch",
             height=min(640, 40 + 36 * len(synthese)),
             column_config={
                 "Part à vide": st.column_config.ProgressColumn("Part à vide", format="%.0f %%", min_value=0, max_value=100),
                 "Jours ouvrés sans activité": st.column_config.NumberColumn("Jours sans activité"),
                 "Dates sans activité": st.column_config.TextColumn("Dates", width="medium"),
-                "Plus long écart (h)": st.column_config.NumberColumn("Plus long arrêt (h)", format="%.0f"),
+                "Plus long écart (h)": st.column_config.Column("Plus long arrêt"),
                 "Km chargés estimés": st.column_config.NumberColumn("Km chargés", format="%.0f"),
                 "Km à vide estimés": st.column_config.NumberColumn("Km à vide", format="%.0f"),
             })
