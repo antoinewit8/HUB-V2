@@ -58,6 +58,8 @@ TOOLS = [
          cat="planning", desc="Vue planeur des chargements et déchargements, par jour ou par ressource."),
     dict(key="groupage", file="outils/optimiseur_groupage.py", title="Optimiseur de groupage", icon="merge",
          cat="planning", desc="Associe les commandes à faire en camions groupés : remplissage, dates, tournée la plus courte."),
+    dict(key="affretements", file="outils/prix_affretement.py", title="Prix d’affrètement", icon="euro",
+         cat="planning", desc="Ce que chaque sous-traitant a facturé par trajet : dernier prix, fourchette, marge et historique."),
     dict(key="tractionnaires", file="outils/tractionnaires_km.py", title="Tractionnaires KM", icon="people",
          cat="renta", desc="Km estimés PTV, CA et rentabilité par tractionnaire et par véhicule."),
     dict(key="renta_departements", file="outils/renta_departements.py", title="Rentabilité par département",
