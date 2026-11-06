@@ -221,6 +221,9 @@
         .tc-bar { height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; }
         .tc-fill { height: 100%; background: var(--blue); border-radius: 3px; }
         .tc-fill.km { background: var(--teal); }
+        #ferry-cost { display: none; margin-top: 8px; font-size: 12.5px; color: var(--sub); line-height: 1.45; }
+        #ferry-cost.show { display: block; }
+        #ferry-cost b { color: var(--text, #1d1d1f); font-weight: 600; }
         .tc-none { font-size: 12.5px; color: var(--sub); line-height: 1.5; margin: 0; }
         .tc-none code { font: 11.5px ui-monospace, "SF Mono", Menlo, monospace; background: var(--soft);
             padding: 1px 5px; border-radius: 5px; color: var(--text); }
@@ -742,6 +745,7 @@
                     </div>
                 </div>
                 <div id="km-detail"></div>
+                <div id="ferry-cost"></div>
                 <div id="toll-detail"></div>
                 <div id="co2-line"></div>
                 <div id="eta-box"></div>
@@ -903,7 +907,7 @@
 
         // Ce cache est aussi gardé dans le navigateur (3 jours, 40 tracés, hors trafic réel) :
         // un trajet déjà fait s'affiche tout de suite, même après avoir fermé la carte.
-        const LS_ROUTES = 'cm_routes_v1', LS_TTL_MS = 3 * 24 * 3600e3, LS_MAX = 40;
+        const LS_ROUTES = 'cm_routes_v2', LS_TTL_MS = 3 * 24 * 3600e3, LS_MAX = 40;
         try {
             const now = Date.now();
             for (const [k, t, d] of JSON.parse(localStorage.getItem(LS_ROUTES) || '[]')) {
@@ -2236,6 +2240,7 @@
                 : d.duration_h != null ? _fmtH(d.duration_h) : '—';
             document.getElementById('dur-l').textContent = e ? 'Conduite' : 'Durée';
             document.getElementById('toll').textContent = (d.prix_peage  ?? '—') + ' €';
+            renderFerryCost(d);
             renderTollDetail();
             renderKmDetail();
             renderFerries();
@@ -2752,6 +2757,25 @@
             return rows.length ? rows : null;
         }
 
+        // PTV compte le prix des ferries / navettes dans son montant de péage :
+        // le serveur le sépare (prix_traversee) pour que « Péage » reste routier.
+        const fmtEur = v => Number(v).toLocaleString('fr-BE',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+
+        function renderFerryCost(d) {
+            const el = document.getElementById('ferry-cost');
+            const v = Number(d && d.prix_traversee);
+            if (!d || !(v > 0)) { el.classList.remove('show'); el.innerHTML = ''; return; }
+            const noms = [...new Set((d.traversee_detail || []).map(t => t.name).filter(Boolean))];
+            const total = Number(d.prix_total);
+            el.innerHTML = `Traversée${noms.length > 1 ? 's' : ''}`
+                + (noms.length ? ` (${noms.map(esc).join(', ')})` : '')
+                + ` : <b>${fmtEur(v)}</b>`
+                + (total > 0 ? ` · péage + traversée ${fmtEur(total)}` : '')
+                + '<br>Tarif public PTV, hors TVA, hors remises de l\'armateur.';
+            el.classList.add('show');
+        }
+
         function renderTollDetail() {
             const box = document.getElementById('toll-detail');
             const rows = parseTollByCountry(lastRouteData);
@@ -2801,10 +2825,16 @@
                    <span class="tc-name">Total</span>
                    <span class="tc-amount">${total.toFixed(2).replace('.', ',')} €</span>
                </div>`
-            + ((lastRouteData && Array.isArray(lastRouteData.crossings) && lastRouteData.crossings.length)
-                ? '<p class="tc-none" style="margin-top:6px;">Le prix des traversées (ferry, navette) '
-                  + 'n\'est pas compris dans ce montant.</p>'
-                : '');
+            + (() => {
+                const d = lastRouteData || {};
+                const v = Number(d.prix_traversee);
+                if (v > 0) return `<p class="tc-none" style="margin-top:6px;">Traversée(s) en plus, `
+                    + `comptée à part : ${fmtEur(v)}.</p>`;
+                if (Array.isArray(d.crossings) && d.crossings.length && d.prix_traversee == null)
+                    return '<p class="tc-none" style="margin-top:6px;">Ce montant peut inclure le prix '
+                        + 'de la traversée (serveur carte pas à jour).</p>';
+                return '';
+            })();
         }
 
         // ═══════════════════════════════════════════════════════
